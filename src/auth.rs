@@ -26,7 +26,7 @@ struct Config {
 }
 
 #[derive(Default)]
-struct DovecotUser {
+pub struct DovecotUser {
     pub username: String,
     pub db_password: String,
     pub home: String,
@@ -34,6 +34,37 @@ struct DovecotUser {
     pub uid: String,
     pub gid: String,
     pub quota_rule: String,
+}
+
+impl std::ops::Index<&'_ str> for DovecotUser {
+    type Output = String;
+    fn index(&self, s: &str) -> &String {
+        match s {
+            "username" => &self.username,
+            "db_password" => &self.db_password,
+            "home" => &self.home,
+            "mail" => &self.mail,
+            "uid" => &self.uid,
+            "gid" => &self.gid,
+            "quota_rule" => &self.quota_rule,
+            _ => panic!("unknown field: {}", s),
+        }
+    }
+}
+
+impl std::ops::IndexMut<&'_ str> for DovecotUser {
+    fn index_mut(&mut self, s: &str) -> &mut String {
+        match s {
+            "username" => &mut self.username,
+            "db_password" => &mut self.db_password,
+            "home" => &mut self.home,
+            "mail" => &mut self.mail,
+            "uid" => &mut self.uid,
+            "gid" => &mut self.gid,
+            "quota_rule" => &mut self.quota_rule,
+            _ => panic!("unknown field: {}", s),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -73,8 +104,15 @@ impl From<mysql::Error> for AuthError {
     }
 }
 
+fn mysql_value_to_string(value: &Value) -> std::result::Result<String, mysql::error::Error> {
+    match from_value_opt::<String>(value.clone()) {
+        Ok(s) => Ok(s),
+        Err(_) => Ok(from_value_opt::<i64>(value.clone())?.to_string())
+    }
+}
 
-const FIELDS: [&str; 6] = ["password", "home", "mail", "uid", "gid", "quota_rule"];
+
+const USERDB_FIELDS: [&str; 6] = ["password", "home", "mail", "uid", "gid", "quota_rule"];
 fn user_lookup(username: &str, url: &str, user_query: &str) -> std::result::Result<Option<DovecotUser>, mysql::error::Error> {
     let opts = Opts::from_url(url)?;
     let pool = Pool::new(opts)?;
@@ -83,50 +121,29 @@ fn user_lookup(username: &str, url: &str, user_query: &str) -> std::result::Resu
     match conn.exec_first(&stmt, params! { username })? {
         Some(result) => {
             let row: Row = result;
-            let mut user = DovecotUser { username: username.to_string(), ..Default::default() };
-            let mut db_values: Vec<(String, String)> = Vec::new();
+            let mut query_result: Vec<(String, String)> = Vec::new();
+
             for column in row.columns_ref() {
                 let column_name = column.name_str();
                 let column_name_str = column_name.to_string();
 
-                if !FIELDS.contains(&&column_name_str[..]) {
+                if !USERDB_FIELDS.contains(&&column_name_str[..]) {
                     continue;
                 }
 
-                let value = match from_value_opt::<String>(row[column_name.as_ref()].clone()) {
-                    Ok(string) => string,
-                    Err(_) => {
-                        match from_value_opt::<i64>(row[column_name.as_ref()].clone()) {
-                            Ok(integer) => integer.to_string(),
-                            Err(_) => {
-                                continue;
-                            }
-                        }
-                    }
-                };
-
-                //db_values.push((column_name_str, value));
-                if column_name_str == "password" {
-                    user.db_password = value;
-                } else if column_name_str == "home" {
-                    user.home = value;
-                } else if column_name_str == "mail" {
-                    user.mail = value;
-                } else if column_name_str == "uid" {
-                    user.uid = value;
-                } else if column_name_str == "gid" {
-                    user.gid = value;
-                } else if column_name_str == "quota_rule" {
-                    user.quota_rule = value;
-                }
+                let value = mysql_value_to_string(&row[column_name.as_ref()])?;
+                query_result.push((column_name_str, value));
             }
+
+            let mut user = DovecotUser { username: username.to_string(), ..Default::default() };
+            query_result.into_iter().map(|(key, value)| user[&key] = value);
             Ok(Some(user))
         },
         None => Ok(None)
     }
 }
 
-pub fn nextcloud_auth(fd: i32, config_file: &str) -> std::result::Result<(), AuthError> {
+pub fn nextcloud_auth(fd: i32, config_file: &str) -> std::result::Result<DovecotUser, AuthError> {
     let config = Config::from_config_file(config_file)?;
     let mut f = unsafe { File::from_raw_fd(fd) };
     let mut input = String::new();
@@ -137,7 +154,7 @@ pub fn nextcloud_auth(fd: i32, config_file: &str) -> std::result::Result<(), Aut
         match user_lookup(credentials[0], &config.db_url, &config.user_query)? {
             Some(user) => {
                 println!("{}", user.db_password);
-                Ok(())
+                Ok(user)
             },
             None => {
                 Err(AuthError::NoUserError)

@@ -16,6 +16,7 @@ mod auth;
 const ERR_PERMFAIL: i32 = 1;
 const ERR_NOUSER: i32 = 3;
 const ERR_TEMPFAIL: i32 = 111;
+const TEST_REPLY_BIN: &str = "/bin/true";
 
 fn help(myname: &str) {
     println!("Usage: {} REPLYBIN", myname);
@@ -35,12 +36,13 @@ fn main() {
     }
 
     let mut fd = 3;
-    let mut reply_bin = &args[1];
+    let mut reply_bin = &args[1][..];
     let mut test = false;
     if reply_bin == "test" {
+        // in test mode, read credentials from fd 0 (stdin) and use TEST_REPLY_BIN as reply binary
         test = true;
         fd = 0;
-        reply_bin = &"/bin/true".to_string();
+        reply_bin = &TEST_REPLY_BIN;
     }
     std::process::exit(match auth::nextcloud_auth(fd, &format!("{}.toml", myname)) {
         Ok(_) => 0,
