@@ -67,6 +67,16 @@ impl std::ops::IndexMut<&'_ str> for DovecotUser {
     }
 }
 
+impl std::fmt::Display for DovecotUser {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let mut string = String::new();
+        for field in &USERDB_FIELDS {
+            string.push_str(&format!("{}: {}\n", field, self[field]));
+        }
+        write!(f, "{}", string)
+    }
+}
+
 #[derive(Debug)]
 pub enum AuthError {
     PermError,
@@ -111,8 +121,8 @@ fn mysql_value_to_string(value: &Value) -> std::result::Result<String, mysql::er
     }
 }
 
-
 const USERDB_FIELDS: [&str; 6] = ["password", "home", "mail", "uid", "gid", "quota_rule"];
+
 fn user_lookup(username: &str, url: &str, user_query: &str) -> std::result::Result<Option<DovecotUser>, mysql::error::Error> {
     let opts = Opts::from_url(url)?;
     let pool = Pool::new(opts)?;
@@ -135,8 +145,10 @@ fn user_lookup(username: &str, url: &str, user_query: &str) -> std::result::Resu
                 query_result.push((column_name_str, value));
             }
 
-            let mut user = DovecotUser { username: username.to_string(), ..Default::default() };
-            query_result.into_iter().map(|(key, value)| user[&key] = value);
+            let mut user = DovecotUser { username: username.to_string().to_lowercase(), ..Default::default() };
+            for (field, value) in query_result {
+                user[&field] = value;
+            }
             Ok(Some(user))
         },
         None => Ok(None)
@@ -153,7 +165,6 @@ pub fn nextcloud_auth(fd: i32, config_file: &str) -> std::result::Result<Dovecot
     if credentials.len() >= 2 {
         match user_lookup(credentials[0], &config.db_url, &config.user_query)? {
             Some(user) => {
-                println!("{}", user.db_password);
                 Ok(user)
             },
             None => {

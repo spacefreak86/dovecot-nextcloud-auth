@@ -45,7 +45,12 @@ fn main() {
         reply_bin = &TEST_REPLY_BIN;
     }
     std::process::exit(match auth::nextcloud_auth(fd, &format!("{}.toml", myname)) {
-        Ok(_) => 0,
+        Ok(user) => {
+            if test {
+                println!("{}", user.to_string());
+            }
+            0
+        },
         Err(err) => {
             match err {
                 auth::AuthError::PermError => {
