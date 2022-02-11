@@ -12,18 +12,8 @@
 // along with dovecot-nextcloud-auth.  If not, see <http://www.gnu.org/licenses/>.
 
 use std::default::Default;
-use std::{fs::File, io::Read, os::unix::io::FromRawFd, };
-use config_file::{FromConfigFile, ConfigFileError};
-use serde::Deserialize;
 use mysql::*;
 use mysql::prelude::*;
-
-#[derive(Deserialize)]
-struct Config {
-    db_url: String,
-    user_query: String,
-    nextcloud_url: String,
-}
 
 #[derive(Default)]
 pub struct DovecotUser {
@@ -77,43 +67,6 @@ impl std::fmt::Display for DovecotUser {
     }
 }
 
-#[derive(Debug)]
-pub enum AuthError {
-    PermError,
-    NoUserError,
-    TempError(String),
-}
-
-impl std::error::Error for AuthError {}
-
-impl std::fmt::Display for AuthError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            AuthError::PermError => write!(f, "PERMFAIL"),
-            AuthError::NoUserError => write!(f, "NOUSER"),
-            AuthError::TempError(msg) => write!(f, "TEMPFAIL: {}", msg),
-        }
-    }
-}
-
-impl From<ConfigFileError> for AuthError {
-    fn from(error: ConfigFileError) -> Self {
-        AuthError::TempError(error.to_string().to_owned())
-    }
-}
-
-impl From<std::io::Error> for AuthError {
-    fn from(error: std::io::Error) -> Self {
-        AuthError::TempError(error.to_string().to_owned())
-    }
-}
-
-impl From<mysql::Error> for AuthError {
-    fn from(error: mysql::Error) -> Self {
-        AuthError::TempError(error.to_string().to_owned())
-    }
-}
-
 fn mysql_value_to_string(value: &Value) -> std::result::Result<String, mysql::error::Error> {
     match from_value_opt::<String>(value.clone()) {
         Ok(s) => Ok(s),
@@ -123,7 +76,7 @@ fn mysql_value_to_string(value: &Value) -> std::result::Result<String, mysql::er
 
 const USERDB_FIELDS: [&str; 6] = ["password", "home", "mail", "uid", "gid", "quota_rule"];
 
-fn user_lookup(username: &str, url: &str, user_query: &str) -> std::result::Result<Option<DovecotUser>, mysql::error::Error> {
+pub fn user_lookup(username: &str, url: &str, user_query: &str) -> std::result::Result<Option<DovecotUser>, mysql::error::Error> {
     let opts = Opts::from_url(url)?;
     let pool = Pool::new(opts)?;
     let mut conn = pool.get_conn()?;
@@ -152,26 +105,5 @@ fn user_lookup(username: &str, url: &str, user_query: &str) -> std::result::Resu
             Ok(Some(user))
         },
         None => Ok(None)
-    }
-}
-
-pub fn nextcloud_auth(fd: i32, config_file: &str) -> std::result::Result<DovecotUser, AuthError> {
-    let config = Config::from_config_file(config_file)?;
-    let mut f = unsafe { File::from_raw_fd(fd) };
-    let mut input = String::new();
-    f.read_to_string(&mut input)?;
-    let credentials: Vec<&str> = input.split("\0").collect();
-
-    if credentials.len() >= 2 {
-        match user_lookup(credentials[0], &config.db_url, &config.user_query)? {
-            Some(user) => {
-                Ok(user)
-            },
-            None => {
-                Err(AuthError::NoUserError)
-            }
-        }
-    } else {
-        Err(AuthError::TempError(format!("did not receive credentials on fd {}", fd).to_owned()))
     }
 }
