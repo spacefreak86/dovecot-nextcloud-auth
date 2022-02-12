@@ -12,6 +12,7 @@
 // along with dovecot-nextcloud-auth.  If not, see <http://www.gnu.org/licenses/>.
 
 use std::{fs::File, io::Read, os::unix::io::FromRawFd, };
+use std::collections::HashMap;
 use config_file::{FromConfigFile, ConfigFileError};
 use serde::Deserialize;
 
@@ -61,7 +62,7 @@ impl From<mysql::Error> for AuthError {
     }
 }
 
-pub fn nextcloud_auth(fd: i32, config_file: &str) -> std::result::Result<db::DovecotUser, AuthError> {
+pub fn nextcloud_auth(fd: i32, config_file: &str) -> std::result::Result<HashMap<String, String>, AuthError> {
     let config = Config::from_config_file(config_file)?;
     let mut f = unsafe { File::from_raw_fd(fd) };
     let mut input = String::new();

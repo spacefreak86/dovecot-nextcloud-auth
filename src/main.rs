@@ -47,7 +47,7 @@ fn main() {
     std::process::exit(match auth::nextcloud_auth(fd, &format!("{}.toml", myname)) {
         Ok(user) => {
             if test {
-                println!("{}", user.to_string());
+                println!("OK");
             }
             0
         },
