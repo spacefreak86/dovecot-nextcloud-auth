@@ -12,3 +12,4 @@ codegen-units = 1
 mysql = "*"
 config-file = "*"
 serde = { version="*", features=["derive"]}
+nix = "*"

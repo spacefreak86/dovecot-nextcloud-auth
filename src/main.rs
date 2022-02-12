@@ -19,7 +19,7 @@ const ERR_TEMPFAIL: i32 = 111;
 const TEST_REPLY_BIN: &str = "/bin/true";
 
 fn help(myname: &str) {
-    println!("Usage: {} REPLYBIN", myname);
+    println!("Usage: {} [test] REPLYBIN", myname);
 }
 
 fn main() {
@@ -36,21 +36,20 @@ fn main() {
     }
 
     let mut fd = 3;
-    let mut reply_bin = &args[1][..];
+    let mut reply_bin = String::from(&args[1]);
     let mut test = false;
     if reply_bin == "test" {
-        // in test mode, read credentials from fd 0 (stdin) and use TEST_REPLY_BIN as reply binary
+        // in test mode, read credentials from fd 0 (stdin)
         test = true;
         fd = 0;
-        reply_bin = &TEST_REPLY_BIN;
+        if args.len() >= 2 {
+            reply_bin = String::from(&args[2]);
+        } else {
+            reply_bin = String::from(TEST_REPLY_BIN);
+        }
     }
-    std::process::exit(match auth::nextcloud_auth(fd, &format!("{}.toml", myname)) {
-        Ok(user) => {
-            if test {
-                println!("OK");
-            }
-            0
-        },
+    std::process::exit(match auth::nextcloud_auth(fd, &format!("{}.toml", myname), &reply_bin, test) {
+        Ok(()) => 0,
         Err(err) => {
             match err {
                 auth::AuthError::PermError => {

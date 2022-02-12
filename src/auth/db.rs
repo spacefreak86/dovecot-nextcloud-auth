@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use mysql::*;
 use mysql::prelude::*;
 
-const USERDB_FIELDS: [&str; 6] = ["password", "home", "mail", "uid", "gid", "quota_rule"];
+pub const USERDB_FIELDS: [&str; 6] = ["password", "home", "mail", "uid", "gid", "quota_rule"];
 
 fn mysql_value_to_string(value: &Value) -> std::result::Result<String, mysql::error::Error> {
     match from_value_opt::<String>(value.clone()) {
@@ -40,8 +40,7 @@ pub fn user_lookup(username: &str, url: &str, user_query: &str) -> std::result::
                     continue;
                 }
 
-                let value = mysql_value_to_string(&row[column_name.as_ref()])?;
-                user.insert(column_name_str, value);
+                user.insert(column_name_str, mysql_value_to_string(&row[column_name.as_ref()])?);
             }
             Ok(Some(user))
         },

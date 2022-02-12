@@ -12,9 +12,10 @@
 // along with dovecot-nextcloud-auth.  If not, see <http://www.gnu.org/licenses/>.
 
 use std::{fs::File, io::Read, os::unix::io::FromRawFd, };
-use std::collections::HashMap;
+use std::ffi::CString;
 use config_file::{FromConfigFile, ConfigFileError};
 use serde::Deserialize;
+use nix::unistd::execvp;
 
 mod db;
 
@@ -62,23 +63,47 @@ impl From<mysql::Error> for AuthError {
     }
 }
 
-pub fn nextcloud_auth(fd: i32, config_file: &str) -> std::result::Result<HashMap<String, String>, AuthError> {
-    let config = Config::from_config_file(config_file)?;
+fn read_credentials_from_fd(fd: i32) -> std::result::Result<(String, String), AuthError> {
     let mut f = unsafe { File::from_raw_fd(fd) };
     let mut input = String::new();
     f.read_to_string(&mut input)?;
     let credentials: Vec<&str> = input.split("\0").collect();
-
     if credentials.len() >= 2 {
-        match db::user_lookup(credentials[0], &config.db_url, &config.user_query)? {
-            Some(user) => {
-                Ok(user)
-            },
-            None => {
-                Err(AuthError::NoUserError)
-            }
-        }
+        Ok((credentials[0].to_string(), credentials[1].to_string()))
     } else {
         Err(AuthError::TempError(format!("did not receive credentials on fd {}", fd).to_owned()))
+    }
+}
+
+fn call_reply_bin(reply_bin: &str) -> std::result::Result<(), AuthError> {
+    let c_reply_bin = CString::new(reply_bin).expect("CString::new failed");
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut c_args: Vec<CString> = Vec::new();
+    for arg in args {
+        c_args.push(CString::new(arg).expect("CString:: new failed"));
+    }
+    match execvp(&c_reply_bin, &c_args) {
+        Ok(_) => Ok(()),
+        Err(err) => Err(AuthError::TempError(format!("unable to call reply_bin: {}", err.desc())))
+    }
+}
+
+pub fn nextcloud_auth(fd: i32, config_file: &str, reply_bin: &str, test: bool) -> std::result::Result<(), AuthError> {
+    let config = Config::from_config_file(config_file)?;
+    let (username, password) = read_credentials_from_fd(fd)?;
+
+    match db::user_lookup(&username, &config.db_url, &config.user_query)? {
+        Some(user) => {
+            if test {
+                for field in db::USERDB_FIELDS {
+                    println!("{}: {}", field, user[field]);
+                }
+            }
+            call_reply_bin(reply_bin)?;
+            Ok(())
+        },
+        None => {
+            Err(AuthError::NoUserError)
+        }
     }
 }
