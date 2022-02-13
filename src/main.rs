@@ -42,7 +42,7 @@ fn main() {
         // in test mode, read credentials from fd 0 (stdin)
         test = true;
         fd = 0;
-        if args.len() >= 2 {
+        if args.len() > 2 {
             reply_bin = String::from(&args[2]);
         } else {
             reply_bin = String::from(TEST_REPLY_BIN);

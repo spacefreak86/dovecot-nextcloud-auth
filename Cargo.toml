@@ -13,3 +13,4 @@ mysql = "*"
 config-file = "*"
 serde = { version="*", features=["derive"]}
 nix = "*"
+phf = { version="*", features=["macros"]}

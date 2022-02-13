@@ -13,18 +13,13 @@
 
 use std::{fs::File, io::Read, os::unix::io::FromRawFd, };
 use std::ffi::CString;
+use std::collections::HashMap;
+use phf::{phf_map, Map};
 use config_file::{FromConfigFile, ConfigFileError};
 use serde::Deserialize;
 use nix::unistd::execvp;
 
 mod db;
-
-#[derive(Deserialize)]
-struct Config {
-    db_url: String,
-    user_query: String,
-    nextcloud_url: String,
-}
 
 #[derive(Debug)]
 pub enum AuthError {
@@ -75,17 +70,59 @@ fn read_credentials_from_fd(fd: i32) -> std::result::Result<(String, String), Au
     }
 }
 
-fn call_reply_bin(reply_bin: &str) -> std::result::Result<(), AuthError> {
+static USERDB_ENV_MAP: Map<&'static str, &'static str> = phf_map! {
+    "user" => "USER",
+    "home" => "HOME",
+    "mail" => "userdb_mail",
+    "uid"  => "userdb_uid",
+    "gid"  => "userdb_gid",
+    "quota_rule" => "userdb_quota_rule",
+};
+
+fn update_env(user: &HashMap<String, String>) {
+    let mut extra: Vec<&str> = Vec::new();
+    for (&field, &env_var) in USERDB_ENV_MAP.entries() {
+        if &user[field] == "" {
+            continue;
+        }
+        if env_var.starts_with("userdb_") {
+            extra.push(env_var);
+        }
+        std::env::set_var(env_var, &user[field]);
+    }
+    if extra.len() > 0 {
+        std::env::set_var("EXTRA", extra.join(" "))
+    }
+}
+
+fn call_reply_bin(reply_bin: &str, test: bool) -> std::result::Result<(), AuthError> {
     let c_reply_bin = CString::new(reply_bin).expect("CString::new failed");
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut skip_args = 1;
+    if test {
+        skip_args += 1;
+    }
+    let args: Vec<String> = std::env::args().skip(skip_args).collect();
     let mut c_args: Vec<CString> = Vec::new();
     for arg in args {
         c_args.push(CString::new(arg).expect("CString:: new failed"));
     }
     match execvp(&c_reply_bin, &c_args) {
         Ok(_) => Ok(()),
-        Err(err) => Err(AuthError::TempError(format!("unable to call reply_bin: {}", err.desc())))
+        Err(err) => Err(AuthError::TempError(format!("unable to call reply binary: {}", err.desc())))
     }
+}
+
+fn print_userdb_fields(user: &HashMap<String, String>) {
+    for field in db::USERDB_FIELDS {
+        println!("{}: {}", field, user[field]);
+    }
+}
+
+#[derive(Deserialize)]
+struct Config {
+    db_url: String,
+    user_query: String,
+    nextcloud_url: String,
 }
 
 pub fn nextcloud_auth(fd: i32, config_file: &str, reply_bin: &str, test: bool) -> std::result::Result<(), AuthError> {
@@ -94,13 +131,21 @@ pub fn nextcloud_auth(fd: i32, config_file: &str, reply_bin: &str, test: bool) -
 
     match db::user_lookup(&username, &config.db_url, &config.user_query)? {
         Some(user) => {
-            if test {
-                for field in db::USERDB_FIELDS {
-                    println!("{}: {}", field, user[field]);
+            let credentials_lookup = std::env::var("CREDENTIALS_LOOKUP");
+            if credentials_lookup.is_ok() && credentials_lookup.unwrap() == "1" {
+                let authorized = std::env::var("AUTHORIZED");
+                if authorized.is_ok() && authorized.unwrap() == "1" {
+                    std::env::set_var("AUTHORIZED", "2");
                 }
+    
+                if test {
+                    print_userdb_fields(&user);
+                }
+            } else {
+
             }
-            call_reply_bin(reply_bin)?;
-            Ok(())
+            update_env(&user);
+            Ok(call_reply_bin(reply_bin, test)?)
         },
         None => {
             Err(AuthError::NoUserError)

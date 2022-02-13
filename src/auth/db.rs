@@ -27,11 +27,10 @@ fn mysql_value_to_string(value: &Value) -> std::result::Result<String, mysql::er
 pub fn user_lookup(username: &str, url: &str, user_query: &str) -> std::result::Result<Option<HashMap<String, String>>, mysql::error::Error> {
     let mut conn = Pool::new(Opts::from_url(url)?)?.get_conn()?;
     let stmt = conn.prep(user_query)?;
-    match conn.exec_first(&stmt, params! { username })? {
+    match conn.exec_first(&stmt, params! { "username" => username.to_lowercase() })? {
         Some(result) => {
             let row: Row = result;
             let mut user = HashMap::new();
-            user.insert(String::from("username"), username.to_string().to_lowercase());
             for column in row.columns_ref() {
                 let column_name = column.name_str();
                 let column_name_str = column_name.to_string();
@@ -41,6 +40,9 @@ pub fn user_lookup(username: &str, url: &str, user_query: &str) -> std::result::
                 }
 
                 user.insert(column_name_str, mysql_value_to_string(&row[column_name.as_ref()])?);
+            }
+            if !user.contains_key("user") {
+                user.insert(String::from("user"), username.to_lowercase());
             }
             Ok(Some(user))
         },
