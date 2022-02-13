@@ -112,12 +112,6 @@ fn call_reply_bin(reply_bin: &str, test: bool) -> std::result::Result<(), AuthEr
     }
 }
 
-fn print_userdb_fields(user: &HashMap<String, String>) {
-    for field in db::USERDB_FIELDS {
-        println!("{}: {}", field, user[field]);
-    }
-}
-
 #[derive(Deserialize)]
 struct Config {
     db_url: String,
@@ -133,19 +127,17 @@ pub fn nextcloud_auth(fd: i32, config_file: &str, reply_bin: &str, test: bool) -
         Some(user) => {
             let credentials_lookup = std::env::var("CREDENTIALS_LOOKUP");
             if credentials_lookup.is_ok() && credentials_lookup.unwrap() == "1" {
+                // credentials lookup
                 let authorized = std::env::var("AUTHORIZED");
                 if authorized.is_ok() && authorized.unwrap() == "1" {
                     std::env::set_var("AUTHORIZED", "2");
                 }
-    
-                if test {
-                    print_userdb_fields(&user);
-                }
+                update_env(&user);
+                Ok(call_reply_bin(reply_bin, test)?)
             } else {
-
+                // credentials verify
+                Err(AuthError::PermError)
             }
-            update_env(&user);
-            Ok(call_reply_bin(reply_bin, test)?)
         },
         None => {
             Err(AuthError::NoUserError)
