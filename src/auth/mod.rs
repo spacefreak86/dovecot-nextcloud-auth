@@ -119,28 +119,33 @@ struct Config {
     nextcloud_url: String,
 }
 
-fn verify_nextcloud_credentials(username: &str, password: &str, url: &str) -> std::result::Result<(), AuthError> {
-    let webdav_url = format!("{}/remote.php/dav/files/{}", url, username);
-    let authorization = String::from("Basic ") + &base64::encode(format!("{}:{}", username, password));
-    match ureq::request("PROPFIND", &webdav_url).set("Authorization", &authorization).call() {
-        Ok(_) => {
-            Ok(())
-        },
-        Err(ureq::Error::Status(code, res)) => {
-            if code == 401 {
-                Err(AuthError::PermError)
-            } else {
-                Err(AuthError::TempError(format!("unexpected response from nextcloud: {} {}", code, res.status_text()).to_owned()))
-            }
-        },
-        Err(err) => Err(AuthError::TempError(format!("unable to reach nextcloud: {}", err.to_string())))
-    }
-}
-
 fn get_env_var(name: &str) -> String {
     match std::env::var(name) {
         Ok(value) => value,
         Err(_) => String::new()
+    }
+}
+
+fn verify_nextcloud_credentials(username: &str, password: &str, nextcloud_url: &str) -> std::result::Result<bool, AuthError> {
+    let url = format!("{}/remote.php/dav/files/{}", nextcloud_url, username);
+    let authorization = String::from("Basic ") + &base64::encode(format!("{}:{}", username, password));
+    match ureq::request("PROPFIND", &url).set("Authorization", &authorization).call() {
+        Ok(res) => {
+            let code = res.status();
+            if code == 207 {
+                Ok(true)
+            } else {
+                Err(AuthError::TempError(format!("unexpected http response: {} {}", code, res.status_text()).to_owned()))
+            }
+        },
+        Err(ureq::Error::Status(code, res)) => {
+            if code == 401 {
+                Ok(false)
+            } else {
+                Err(AuthError::TempError(format!("unexpected http error response: {} {}", code, res.status_text()).to_owned()))
+            }
+        },
+        Err(err) => Err(AuthError::TempError(format!("unable to reach server: {}", err.to_string())))
     }
 }
 
@@ -155,13 +160,28 @@ pub fn nextcloud_auth(fd: i32, config_file: &str, reply_bin: &str, test: bool) -
                 if get_env_var("AUTHORIZED") == "1" {
                     std::env::set_var("AUTHORIZED", "2");
                 }
+                update_env(&user);
+                call_reply_bin(reply_bin, test)?;
+                Ok(())
             } else {
                 // credentials verify
-                verify_nextcloud_credentials(&username, &password, &config.nextcloud_url)?;
+                match verify_nextcloud_credentials(&username, &password, &config.nextcloud_url) {
+                    Ok(credentials_ok) => {
+                        // got authentication result from nextcloud
+                        if credentials_ok {
+                            update_env(&user);
+                            call_reply_bin(reply_bin, test)?;
+                            Ok(())
+                        } else {
+                            Err(AuthError::PermError)
+                        }
+                    },
+                    Err(err) => {
+                        eprintln!("{}", err.to_string());
+                        Err(AuthError::TempError("NEED_TO_FIX".to_string()))
+                    }
+                }
             }
-            update_env(&user);
-            call_reply_bin(reply_bin, test)?;
-            Ok(())
         },
         None => {
             Err(AuthError::NoUserError)
