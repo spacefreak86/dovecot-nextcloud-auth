@@ -119,25 +119,49 @@ struct Config {
     nextcloud_url: String,
 }
 
+fn verify_nextcloud_credentials(username: &str, password: &str, url: &str) -> std::result::Result<(), AuthError> {
+    let webdav_url = format!("{}/remote.php/dav/files/{}", url, username);
+    let authorization = String::from("Basic ") + &base64::encode(format!("{}:{}", username, password));
+    match ureq::request("PROPFIND", &webdav_url).set("Authorization", &authorization).call() {
+        Ok(_) => {
+            Ok(())
+        },
+        Err(ureq::Error::Status(code, res)) => {
+            if code == 401 {
+                Err(AuthError::PermError)
+            } else {
+                Err(AuthError::TempError(format!("unexpected response from nextcloud: {} {}", code, res.status_text()).to_owned()))
+            }
+        },
+        Err(err) => Err(AuthError::TempError(format!("unable to reach nextcloud: {}", err.to_string())))
+    }
+}
+
+fn get_env_var(name: &str) -> String {
+    match std::env::var(name) {
+        Ok(value) => value,
+        Err(_) => String::new()
+    }
+}
+
 pub fn nextcloud_auth(fd: i32, config_file: &str, reply_bin: &str, test: bool) -> std::result::Result<(), AuthError> {
     let config = Config::from_config_file(config_file)?;
     let (username, password) = read_credentials_from_fd(fd)?;
 
     match db::user_lookup(&username, &config.db_url, &config.user_query)? {
         Some(user) => {
-            let credentials_lookup = std::env::var("CREDENTIALS_LOOKUP");
-            if credentials_lookup.is_ok() && credentials_lookup.unwrap() == "1" {
+            if get_env_var("CREDENTIALS_LOOKUP") == "1" {
                 // credentials lookup
-                let authorized = std::env::var("AUTHORIZED");
-                if authorized.is_ok() && authorized.unwrap() == "1" {
+                if get_env_var("AUTHORIZED") == "1" {
                     std::env::set_var("AUTHORIZED", "2");
                 }
-                update_env(&user);
-                Ok(call_reply_bin(reply_bin, test)?)
             } else {
                 // credentials verify
-                Err(AuthError::PermError)
+                verify_nextcloud_credentials(&username, &password, &config.nextcloud_url)?;
             }
+            update_env(&user);
+            call_reply_bin(reply_bin, test)?;
+            Ok(())
         },
         None => {
             Err(AuthError::NoUserError)

@@ -28,8 +28,8 @@ pub fn user_lookup(username: &str, url: &str, user_query: &str) -> std::result::
     let mut conn = Pool::new(Opts::from_url(url)?)?.get_conn()?;
     let stmt = conn.prep(user_query)?;
     match conn.exec_first(&stmt, params! { "username" => username.to_lowercase() })? {
-        Some(result) => {
-            let row: Row = result;
+        Some(res) => {
+            let row: Row = res;
             let mut user = HashMap::new();
             for column in row.columns_ref() {
                 let column_name = column.name_str();
