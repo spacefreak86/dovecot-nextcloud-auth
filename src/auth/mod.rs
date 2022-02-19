@@ -11,55 +11,21 @@
 // You should have received a copy of the GNU General Public License
 // along with dovecot-nextcloud-auth.  If not, see <http://www.gnu.org/licenses/>.
 
+pub mod error;
+mod db;
+mod hasher;
+mod webdav;
+
 use std::{fs::File, io::Read, os::unix::io::FromRawFd, };
 use std::ffi::CString;
 use std::collections::HashMap;
 use phf::{phf_map, Map};
-use config_file::{FromConfigFile, ConfigFileError};
+use config_file::FromConfigFile;
 use serde::Deserialize;
 use nix::unistd::execvp;
 use rand::Rng;
 use rand::distributions::Alphanumeric;
-
-mod db;
-mod hasher;
-
-#[derive(Debug)]
-pub enum AuthError {
-    PermError,
-    NoUserError,
-    TempError(String),
-}
-
-impl std::error::Error for AuthError {}
-
-impl std::fmt::Display for AuthError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            AuthError::PermError => write!(f, "PERMFAIL"),
-            AuthError::NoUserError => write!(f, "NOUSER"),
-            AuthError::TempError(msg) => write!(f, "TEMPFAIL: {}", msg),
-        }
-    }
-}
-
-impl From<ConfigFileError> for AuthError {
-    fn from(error: ConfigFileError) -> Self {
-        AuthError::TempError(error.to_string().to_owned())
-    }
-}
-
-impl From<std::io::Error> for AuthError {
-    fn from(error: std::io::Error) -> Self {
-        AuthError::TempError(error.to_string().to_owned())
-    }
-}
-
-impl From<mysql::Error> for AuthError {
-    fn from(error: mysql::Error) -> Self {
-        AuthError::TempError(error.to_string().to_owned())
-    }
-}
+use error::AuthError;
 
 fn read_credentials_from_fd(fd: i32) -> std::result::Result<(String, String), AuthError> {
     let mut f = unsafe { File::from_raw_fd(fd) };
@@ -132,28 +98,7 @@ struct Config {
     cache_max_lifetime: i64,
 }
 
-fn nextcloud_verify_credentials(username: &str, password: &str, nextcloud_url: &str) -> std::result::Result<bool, AuthError> {
-    let url = format!("{}/remote.php/dav/files/{}", nextcloud_url, username);
-    let authorization = String::from("Basic ") + &base64::encode(format!("{}:{}", username, password));
-    match ureq::request("PROPFIND", &url).set("Authorization", &authorization).call() {
-        Ok(res) => {
-            let code = res.status();
-            if code == 207 {
-                Ok(true)
-            } else {
-                Err(AuthError::TempError(format!("unexpected http response: {} {}", code, res.status_text()).to_owned()))
-            }
-        },
-        Err(ureq::Error::Status(code, res)) => {
-            if code == 401 {
-                Ok(false)
-            } else {
-                Err(AuthError::TempError(format!("unexpected http error response: {} {}", code, res.status_text()).to_owned()))
-            }
-        },
-        Err(err) => Err(AuthError::TempError(format!("unable to reach server: {}", err.to_string())))
-    }
-}
+const USERDB_FIELDS: [&str; 6] = ["password", "home", "mail", "uid", "gid", "quota_rule"];
 
 pub fn nextcloud_auth(fd: i32, config_file: &str, reply_bin: &str, test: bool) -> std::result::Result<(), AuthError> {
     let config = Config::from_config_file(config_file)?;
@@ -162,7 +107,7 @@ pub fn nextcloud_auth(fd: i32, config_file: &str, reply_bin: &str, test: bool) -
 
     if get_env_var("CREDENTIALS_LOOKUP") == "1" {
         // credentials lookup
-        match db::get_user(&username, &conn_pool, &config.user_query)? {
+        match db::get_user(&username, &conn_pool, &config.user_query, &USERDB_FIELDS.to_vec())? {
             Some(user) => {
                 if get_env_var("AUTHORIZED") == "1" {
                     std::env::set_var("AUTHORIZED", "2");
@@ -179,7 +124,7 @@ pub fn nextcloud_auth(fd: i32, config_file: &str, reply_bin: &str, test: bool) -
         // credentials verify
         let mut no_user: bool = false;
         if config.user_query.len() > 0 {
-            match db::get_user(&username, &conn_pool, &config.user_query)? {
+            match db::get_user(&username, &conn_pool, &config.user_query, &USERDB_FIELDS.to_vec())? {
                 Some(user) => {
                     update_env(&user);
                 },
@@ -192,22 +137,23 @@ pub fn nextcloud_auth(fd: i32, config_file: &str, reply_bin: &str, test: bool) -
             Err(AuthError::NoUserError)
         } else {
             db::delete_dead_hashes(config.cache_max_lifetime, &conn_pool, &config.cache_table)?;
-            let all_hashes = db::get_hashes(&username, &conn_pool, &config.cache_table)?;
-            let active_hashes: Vec<&String> = all_hashes.iter().filter_map(|(hash, last_verify)| match last_verify {
-                l if l <= &config.cache_verify_interval => Some(hash),
-                _ => None
-            }).collect();
-            match hasher::get_matching_hash(&password, &active_hashes) {
+            let mut verified_hashes: Vec<String> = Vec::new();
+            let mut expired_hashes: Vec<String> = Vec::new();
+            for (hash, last_verify) in db::get_hashes(&username, &conn_pool, &config.cache_table, config.cache_max_lifetime)? {
+                if last_verify <= config.cache_verify_interval {
+                    verified_hashes.push(hash);
+                } else if last_verify > config.cache_verify_interval && last_verify <= config.cache_max_lifetime {
+                    expired_hashes.push(hash);
+                }
+            }
+            match hasher::get_matching_hash(&password, &verified_hashes) {
                 Some(_) => {
                     call_reply_bin(reply_bin, test)?;
                     Ok(())
                 },
                 None => {
-                    let expired_hashes: Vec<&String> = all_hashes.iter().filter_map(|(hash, last_verify)| match last_verify {
-                        l if l > &config.cache_verify_interval && l <= &config.cache_max_lifetime => Some(hash),
-                        _ => None
-                    }).collect();
-                    match nextcloud_verify_credentials(&username, &password, &config.nextcloud_url) {
+                    let url = format!("{}/remote.php/dav/files/{}", config.nextcloud_url, username);
+                    match webdav::verify_credentials(&username, &password, &url) {
                         Ok(verify_ok) => {
                             // got authentication result from nextcloud
                             if verify_ok {

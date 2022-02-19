@@ -13,6 +13,8 @@
 
 mod auth;
 
+use auth::{nextcloud_auth, error::AuthError};
+
 const ERR_PERMFAIL: i32 = 1;
 const ERR_NOUSER: i32 = 3;
 const ERR_TEMPFAIL: i32 = 111;
@@ -48,23 +50,23 @@ fn main() {
             reply_bin = String::from(TEST_REPLY_BIN);
         }
     }
-    std::process::exit(match auth::nextcloud_auth(fd, &format!("{}.toml", myname), &reply_bin, test) {
+    std::process::exit(match nextcloud_auth(fd, &format!("{}.toml", myname), &reply_bin, test) {
         Ok(()) => 0,
         Err(err) => {
             match err {
-                auth::AuthError::PermError => {
+                AuthError::PermError => {
                     if test {
                         eprintln!("{}", err);
                     }
                     ERR_PERMFAIL
                 },
-                auth::AuthError::NoUserError => {
+                AuthError::NoUserError => {
                     if test {
                         eprintln!("{}", err);
                     }
                     ERR_NOUSER
                 },
-                auth::AuthError::TempError(errmsg) => {
+                AuthError::TempError(errmsg) => {
                     eprintln!("{}", errmsg);
                     ERR_TEMPFAIL
                 },

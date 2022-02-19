@@ -15,13 +15,11 @@ use std::collections::HashMap;
 use mysql::*;
 use mysql::prelude::*;
 
-pub const USERDB_FIELDS: [&str; 6] = ["password", "home", "mail", "uid", "gid", "quota_rule"];
-
 pub fn get_conn_pool(url: &str) -> std::result::Result<Pool, mysql::error::Error> {
     Ok(Pool::new(Opts::from_url(url)?)?)
 }
 
-pub fn get_user(username: &str, pool: &Pool, user_query: &str) -> std::result::Result<Option<HashMap<String, String>>, mysql::error::Error> {
+pub fn get_user(username: &str, pool: &Pool, user_query: &str, wanted_fields: &Vec<&str>) -> std::result::Result<Option<HashMap<String, String>>, mysql::error::Error> {
     let mut conn = pool.get_conn()?;
     let stmt = conn.prep(user_query)?;
     match conn.exec_first(&stmt, params! { "username" => username.to_lowercase() })? {
@@ -30,7 +28,7 @@ pub fn get_user(username: &str, pool: &Pool, user_query: &str) -> std::result::R
             let mut user = HashMap::new();
             for column in row.columns_ref() {
                 let column_name = column.name_str();
-                if !USERDB_FIELDS.contains(&&column_name[..]) {
+                if !wanted_fields.contains(&&column_name[..]) {
                     continue;
                 } else if column_name == "uid" || column_name == "gid" {
                     user.insert(column_name.to_string(), from_value_opt::<i64>(row[column_name.as_ref()].clone())?.to_string());
@@ -47,18 +45,24 @@ pub fn get_user(username: &str, pool: &Pool, user_query: &str) -> std::result::R
     }
 }
 
-pub fn get_hashes(username: &str, pool: &Pool, cache_table: &str) -> std::result::Result<Vec<(String, i64)>, mysql::error::Error> {
+pub fn get_hashes(username: &str, pool: &Pool, cache_table: &str, max_lifetime: i64) -> std::result::Result<Vec<(String, i64)>, mysql::error::Error> {
     let mut conn = pool.get_conn()?;
-    let statement = format!("SELECT password, UNIX_TIMESTAMP() - UNIX_TIMESTAMP(last_verified) as last_verified FROM {} WHERE username = :username ORDER BY last_verified", cache_table);
+    let statement = format!(
+        concat!("SELECT password, UNIX_TIMESTAMP() - UNIX_TIMESTAMP(last_verified) AS last_verified FROM {} ",
+                "WHERE username = :username AND UNIX_TIMESTAMP() - UNIX_TIMESTAMP(last_verified) <= :max_lifetime ORDER BY last_verified"),
+        cache_table);
     let stmt = conn.prep(statement)?;
-    let hash_list: Vec<(String, i64)> = conn.exec_map(&stmt, params! { "username" => username.to_lowercase() },
+    let hash_list: Vec<(String, i64)> = conn.exec_map(&stmt, params! { "username" => username.to_lowercase(), "max_lifetime" => max_lifetime },
                                                       |row: Row| ( from_value(row["password"].clone()), from_value(row["last_verified"].clone()) ))?;
     Ok(hash_list)
 }
 
 pub fn save_hash(username: &str, password: &str, pool: &Pool, cache_table: &str) -> std::result::Result<(), mysql::error::Error> {
     let mut conn = pool.get_conn()?;
-    let statement = format!("INSERT INTO {} (username, password, last_verified) VALUES (:username, :password, NOW()) ON DUPLICATE KEY UPDATE last_verified = NOW()", cache_table);
+    let statement = format!(
+        concat!("INSERT INTO {} (username, password, last_verified) ",
+                "VALUES (:username, :password, NOW()) ON DUPLICATE KEY UPDATE last_verified = NOW()"),
+        cache_table);
     let stmt = conn.prep(statement)?;
     conn.exec_drop(&stmt, params! { "username" => username.to_lowercase(), "password" => password })
 }

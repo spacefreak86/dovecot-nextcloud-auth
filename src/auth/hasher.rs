@@ -39,7 +39,7 @@ pub fn verify_hash(password: &str, hash: &str) -> bool {
     return hash == hash1
 }
 
-pub fn get_matching_hash(password: &str, hash_list: &Vec<&String>) -> Option<String> {
+pub fn get_matching_hash(password: &str, hash_list: &Vec<String>) -> Option<String> {
     for hash in hash_list {
         if verify_hash(password, hash) {
             return Some(hash.to_string());
