@@ -17,15 +17,12 @@ use mysql::prelude::*;
 
 pub const USERDB_FIELDS: [&str; 6] = ["password", "home", "mail", "uid", "gid", "quota_rule"];
 
-fn mysql_value_to_string(value: &Value) -> std::result::Result<String, mysql::error::Error> {
-    match from_value_opt::<String>(value.clone()) {
-        Ok(s) => Ok(s),
-        Err(_) => Ok(from_value_opt::<i64>(value.clone())?.to_string())
-    }
+pub fn get_conn_pool(url: &str) -> std::result::Result<Pool, mysql::error::Error> {
+    Ok(Pool::new(Opts::from_url(url)?)?)
 }
 
-pub fn user_lookup(username: &str, url: &str, user_query: &str) -> std::result::Result<Option<HashMap<String, String>>, mysql::error::Error> {
-    let mut conn = Pool::new(Opts::from_url(url)?)?.get_conn()?;
+pub fn get_user(username: &str, pool: &Pool, user_query: &str) -> std::result::Result<Option<HashMap<String, String>>, mysql::error::Error> {
+    let mut conn = pool.get_conn()?;
     let stmt = conn.prep(user_query)?;
     match conn.exec_first(&stmt, params! { "username" => username.to_lowercase() })? {
         Some(res) => {
@@ -33,13 +30,13 @@ pub fn user_lookup(username: &str, url: &str, user_query: &str) -> std::result::
             let mut user = HashMap::new();
             for column in row.columns_ref() {
                 let column_name = column.name_str();
-                let column_name_str = column_name.to_string();
-
-                if !USERDB_FIELDS.contains(&&column_name_str[..]) {
+                if !USERDB_FIELDS.contains(&&column_name[..]) {
                     continue;
+                } else if column_name == "uid" || column_name == "gid" {
+                    user.insert(column_name.to_string(), from_value_opt::<i64>(row[column_name.as_ref()].clone())?.to_string());
+                } else {
+                    user.insert(column_name.to_string(), from_value_opt::<String>(row[column_name.as_ref()].clone())?);
                 }
-
-                user.insert(column_name_str, mysql_value_to_string(&row[column_name.as_ref()])?);
             }
             if !user.contains_key("user") {
                 user.insert(String::from("user"), username.to_lowercase());
@@ -48,4 +45,27 @@ pub fn user_lookup(username: &str, url: &str, user_query: &str) -> std::result::
         },
         None => Ok(None)
     }
+}
+
+pub fn get_hashes(username: &str, pool: &Pool, cache_table: &str) -> std::result::Result<Vec<(String, i64)>, mysql::error::Error> {
+    let mut conn = pool.get_conn()?;
+    let statement = format!("SELECT password, UNIX_TIMESTAMP() - UNIX_TIMESTAMP(last_verified) as last_verified FROM {} WHERE username = :username ORDER BY last_verified", cache_table);
+    let stmt = conn.prep(statement)?;
+    let hash_list: Vec<(String, i64)> = conn.exec_map(&stmt, params! { "username" => username.to_lowercase() },
+                                                      |row: Row| ( from_value(row["password"].clone()), from_value(row["last_verified"].clone()) ))?;
+    Ok(hash_list)
+}
+
+pub fn save_hash(username: &str, password: &str, pool: &Pool, cache_table: &str) -> std::result::Result<(), mysql::error::Error> {
+    let mut conn = pool.get_conn()?;
+    let statement = format!("INSERT INTO {} (username, password, last_verified) VALUES (:username, :password, NOW()) ON DUPLICATE KEY UPDATE last_verified = NOW()", cache_table);
+    let stmt = conn.prep(statement)?;
+    conn.exec_drop(&stmt, params! { "username" => username.to_lowercase(), "password" => password })
+}
+
+pub fn delete_dead_hashes(max_lifetime: i64, pool: &Pool, cache_table: &str) -> std::result::Result<(), mysql::error::Error> {
+    let mut conn = pool.get_conn()?;
+    let statement = format!("DELETE FROM {} WHERE UNIX_TIMESTAMP() - UNIX_TIMESTAMP(last_verified) > :max_lifetime", cache_table);
+    let stmt = conn.prep(statement)?;
+    conn.exec_drop(&stmt, params! { "max_lifetime" => max_lifetime })
 }

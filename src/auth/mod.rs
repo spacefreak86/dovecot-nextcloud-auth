@@ -18,8 +18,11 @@ use phf::{phf_map, Map};
 use config_file::{FromConfigFile, ConfigFileError};
 use serde::Deserialize;
 use nix::unistd::execvp;
+use rand::Rng;
+use rand::distributions::Alphanumeric;
 
 mod db;
+mod hasher;
 
 #[derive(Debug)]
 pub enum AuthError {
@@ -95,6 +98,13 @@ fn update_env(user: &HashMap<String, String>) {
     }
 }
 
+fn get_env_var(name: &str) -> String {
+    match std::env::var(name) {
+        Ok(value) => value,
+        Err(_) => String::new()
+    }
+}
+
 fn call_reply_bin(reply_bin: &str, test: bool) -> std::result::Result<(), AuthError> {
     let c_reply_bin = CString::new(reply_bin).expect("CString::new failed");
     let mut skip_args = 1;
@@ -115,18 +125,14 @@ fn call_reply_bin(reply_bin: &str, test: bool) -> std::result::Result<(), AuthEr
 #[derive(Deserialize)]
 struct Config {
     db_url: String,
+    cache_table: String,
     user_query: String,
     nextcloud_url: String,
+    cache_verify_interval: i64,
+    cache_max_lifetime: i64,
 }
 
-fn get_env_var(name: &str) -> String {
-    match std::env::var(name) {
-        Ok(value) => value,
-        Err(_) => String::new()
-    }
-}
-
-fn verify_nextcloud_credentials(username: &str, password: &str, nextcloud_url: &str) -> std::result::Result<bool, AuthError> {
+fn nextcloud_verify_credentials(username: &str, password: &str, nextcloud_url: &str) -> std::result::Result<bool, AuthError> {
     let url = format!("{}/remote.php/dav/files/{}", nextcloud_url, username);
     let authorization = String::from("Basic ") + &base64::encode(format!("{}:{}", username, password));
     match ureq::request("PROPFIND", &url).set("Authorization", &authorization).call() {
@@ -152,39 +158,88 @@ fn verify_nextcloud_credentials(username: &str, password: &str, nextcloud_url: &
 pub fn nextcloud_auth(fd: i32, config_file: &str, reply_bin: &str, test: bool) -> std::result::Result<(), AuthError> {
     let config = Config::from_config_file(config_file)?;
     let (username, password) = read_credentials_from_fd(fd)?;
+    let conn_pool = db::get_conn_pool(&config.db_url)?;
 
-    match db::user_lookup(&username, &config.db_url, &config.user_query)? {
-        Some(user) => {
-            if get_env_var("CREDENTIALS_LOOKUP") == "1" {
-                // credentials lookup
+    if get_env_var("CREDENTIALS_LOOKUP") == "1" {
+        // credentials lookup
+        match db::get_user(&username, &conn_pool, &config.user_query)? {
+            Some(user) => {
                 if get_env_var("AUTHORIZED") == "1" {
                     std::env::set_var("AUTHORIZED", "2");
                 }
                 update_env(&user);
                 call_reply_bin(reply_bin, test)?;
                 Ok(())
-            } else {
-                // credentials verify
-                match verify_nextcloud_credentials(&username, &password, &config.nextcloud_url) {
-                    Ok(credentials_ok) => {
-                        // got authentication result from nextcloud
-                        if credentials_ok {
-                            update_env(&user);
-                            call_reply_bin(reply_bin, test)?;
-                            Ok(())
-                        } else {
-                            Err(AuthError::PermError)
+            },
+            None => {
+                Err(AuthError::NoUserError)
+            }
+        }
+    } else {
+        // credentials verify
+        let mut no_user: bool = false;
+        if config.user_query.len() > 0 {
+            match db::get_user(&username, &conn_pool, &config.user_query)? {
+                Some(user) => {
+                    update_env(&user);
+                },
+                None => {
+                    no_user = true;
+                }
+            }
+        }
+        if no_user {
+            Err(AuthError::NoUserError)
+        } else {
+            db::delete_dead_hashes(config.cache_max_lifetime, &conn_pool, &config.cache_table)?;
+            let all_hashes = db::get_hashes(&username, &conn_pool, &config.cache_table)?;
+            let active_hashes: Vec<&String> = all_hashes.iter().filter_map(|(hash, last_verify)| match last_verify {
+                l if l <= &config.cache_verify_interval => Some(hash),
+                _ => None
+            }).collect();
+            match hasher::get_matching_hash(&password, &active_hashes) {
+                Some(_) => {
+                    call_reply_bin(reply_bin, test)?;
+                    Ok(())
+                },
+                None => {
+                    let expired_hashes: Vec<&String> = all_hashes.iter().filter_map(|(hash, last_verify)| match last_verify {
+                        l if l > &config.cache_verify_interval && l <= &config.cache_max_lifetime => Some(hash),
+                        _ => None
+                    }).collect();
+                    match nextcloud_verify_credentials(&username, &password, &config.nextcloud_url) {
+                        Ok(verify_ok) => {
+                            // got authentication result from nextcloud
+                            if verify_ok {
+                                let hash = match hasher::get_matching_hash(&password, &expired_hashes) {
+                                    Some(h) => h,
+                                    None => {
+                                        let salt: String = rand::thread_rng().sample_iter(&Alphanumeric).take(5).map(char::from).collect();
+                                        hasher::ssha512(&password, &salt)
+                                    }
+                                };
+                                db::save_hash(&username, &hash, &conn_pool, &config.cache_table)?;
+                                call_reply_bin(reply_bin, test)?;
+                                Ok(())
+                            } else {
+                                Err(AuthError::PermError)
+                            }
+                        },
+                        Err(err) => {
+                            eprintln!("{}", err.to_string());
+                            match hasher::get_matching_hash(&password, &expired_hashes) {
+                                Some(_) => {
+                                    call_reply_bin(reply_bin, test)?;
+                                    Ok(())
+                                },
+                                None => {
+                                    Err(AuthError::PermError)
+                                }
+                            }
                         }
-                    },
-                    Err(err) => {
-                        eprintln!("{}", err.to_string());
-                        Err(AuthError::TempError("NEED_TO_FIX".to_string()))
                     }
                 }
             }
-        },
-        None => {
-            Err(AuthError::NoUserError)
         }
     }
 }

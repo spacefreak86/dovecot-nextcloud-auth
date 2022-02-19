@@ -1,4 +1,5 @@
 db_url = "mysql://username:password@localhost:3306/database"
+cache_table = "password_cache"
 user_query = """
 SELECT CONCAT('/home/vmail/mail/', maildir) as home, \
        CONCAT('maildir:/home/vmail/mail/', maildir) as mail, \
@@ -6,3 +7,5 @@ SELECT CONCAT('/home/vmail/mail/', maildir) as home, \
        CONCAT('*:bytes=', quota) AS quota_rule, password \
        FROM mailbox WHERE username = :username OR username IN (SELECT goto FROM alias WHERE address = :username AND active = '1') AND active = '1'"""
 nextcloud_url = "https://www.example.com/nextcloud"
+cache_verify_interval = 60
+cache_max_lifetime = 86400

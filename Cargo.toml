@@ -16,3 +16,5 @@ nix = "*"
 phf = { version="*", features=["macros"]}
 ureq = "*"
 base64 = "*"
+sha2 = "*"
+rand = "*"
