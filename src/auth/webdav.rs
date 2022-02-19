@@ -12,7 +12,7 @@
 // along with dovecot-nextcloud-auth.  If not, see <http://www.gnu.org/licenses/>.
 
 use ureq;
-use super::AuthError;
+use super::error::AuthError;
 
 pub fn verify_credentials(username: &str, password: &str, url: &str) -> std::result::Result<bool, AuthError> {
     let authorization = String::from("Basic ") + &base64::encode(format!("{}:{}", username, password));

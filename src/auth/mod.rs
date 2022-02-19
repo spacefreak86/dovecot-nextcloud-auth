@@ -96,6 +96,7 @@ struct Config {
     nextcloud_url: String,
     cache_verify_interval: i64,
     cache_max_lifetime: i64,
+    cache_cleanup: bool,
 }
 
 const USERDB_FIELDS: [&str; 6] = ["password", "home", "mail", "uid", "gid", "quota_rule"];
@@ -136,7 +137,9 @@ pub fn nextcloud_auth(fd: i32, config_file: &str, reply_bin: &str, test: bool) -
         if no_user {
             Err(AuthError::NoUserError)
         } else {
-            db::delete_dead_hashes(config.cache_max_lifetime, &conn_pool, &config.cache_table)?;
+            if config.cache_cleanup {
+                db::delete_dead_hashes(config.cache_max_lifetime, &conn_pool, &config.cache_table)?;
+            }
             let mut verified_hashes: Vec<String> = Vec::new();
             let mut expired_hashes: Vec<String> = Vec::new();
             for (hash, last_verify) in db::get_hashes(&username, &conn_pool, &config.cache_table, config.cache_max_lifetime)? {

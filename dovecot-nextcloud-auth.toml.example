@@ -9,3 +9,4 @@ SELECT CONCAT('/home/vmail/mail/', maildir) as home, \
 nextcloud_url = "https://www.example.com/nextcloud"
 cache_verify_interval = 60
 cache_max_lifetime = 86400
+cache_cleanup = true
