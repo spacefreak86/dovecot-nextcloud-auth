@@ -55,14 +55,15 @@ impl DovecotUser<'_> {
     pub fn get_env(&self) -> HashMap<String, String> {
         let mut extra: Vec<&str> = Vec::new();
         let mut env_vars: HashMap<String, String> = HashMap::new();
-        for field in self.fields.keys() {
-            if self.fields[field].len() > 0 && USERDB_ENVVAR_MAP.contains_key(&field) {
-                let env_var = USERDB_ENVVAR_MAP[&field];
-                if env_var.starts_with("userdb_") {
-                    extra.push(env_var);
-                }
-                env_vars.insert(env_var.to_string(), self.fields[field].clone());
+        for field in USERDB_ENVVAR_MAP.keys() {
+            if self.fields[field].len() == 0 {
+                continue;
             }
+            let env_var = USERDB_ENVVAR_MAP[&field];
+            if env_var.starts_with("userdb_") {
+                extra.push(env_var);
+            }
+            env_vars.insert(env_var.to_string(), self.fields[field].clone());
         }
         if extra.len() > 0 {
             env_vars.insert("EXTRA".to_string(), extra.join(" "));
