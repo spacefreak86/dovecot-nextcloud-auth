@@ -18,6 +18,7 @@ mod hashlib;
 use std::collections::HashMap;
 use std::{fs::File, io::Read, os::unix::io::FromRawFd, };
 use std::ffi::CString;
+use std::{result,env};
 use config_file::FromConfigFile;
 use serde::Deserialize;
 use nix::unistd::execvp;
@@ -53,20 +54,20 @@ impl DovecotUser<'_> {
 
     pub fn get_env(&self) -> HashMap<String, String> {
         let mut extra: Vec<&str> = Vec::new();
-        let mut env: HashMap<String, String> = HashMap::new();
+        let mut env_vars: HashMap<String, String> = HashMap::new();
         for field in self.fields.keys() {
             if self.fields[field].len() > 0 && USERDB_ENVVAR_MAP.contains_key(&field) {
                 let env_var = USERDB_ENVVAR_MAP[&field];
                 if env_var.starts_with("userdb_") {
                     extra.push(env_var);
                 }
-                env.insert(env_var.to_string(), self.fields[field].clone());
+                env_vars.insert(env_var.to_string(), self.fields[field].clone());
             }
         }
         if extra.len() > 0 {
-            env.insert("EXTRA".to_string(), extra.join(" "));
+            env_vars.insert("EXTRA".to_string(), extra.join(" "));
         }
-        env
+        env_vars
     }
 }
 
@@ -82,7 +83,7 @@ impl From<HashMap<String, String>> for DovecotUser<'_> {
     }
 }
 
-fn verify_webdav_credentials(username: &str, password: &str, url: &str) -> std::result::Result<bool, AuthError> {
+fn verify_webdav_credentials(username: &str, password: &str, url: &str) -> result::Result<bool, AuthError> {
     let authorization = String::from("Basic ") + &base64::encode(format!("{}:{}", username, password));
     match ureq::request("PROPFIND", &url).set("Authorization", &authorization).call() {
         Ok(res) => {
@@ -123,20 +124,20 @@ struct Authenticator {
 }
 
 impl Authenticator {
-    fn call_reply_bin(&self, user: &DovecotUser) -> std::result::Result<(), AuthError> {
+    fn call_reply_bin(&self, user: &DovecotUser) -> result::Result<(), AuthError> {
         let c_reply_bin = CString::new(self.reply_bin.clone()).expect("CString::new failed");
         let mut skip_args = 1;
         if self.test {
             skip_args += 1;
         }
-        let args: Vec<String> = std::env::args().skip(skip_args).collect();
+        let args: Vec<String> = env::args().skip(skip_args).collect();
         let mut c_args: Vec<CString> = Vec::new();
         for arg in args {
             c_args.push(CString::new(arg).expect("CString:: new failed"));
         }
 
         for (env_var, value) in user.get_env() {
-            std::env::set_var(env_var, value);
+            env::set_var(env_var, value);
         }
 
         match execvp(&c_reply_bin, &c_args) {
@@ -145,7 +146,7 @@ impl Authenticator {
         }
     }
 
-    fn credentials_lookup(&self, username: &str) -> std::result::Result<DovecotUser, AuthError> {
+    fn credentials_lookup(&self, username: &str) -> result::Result<DovecotUser, AuthError> {
         match db::get_user(&username, &self.conn_pool, &self.config.user_query, &USER_FIELDS)? {
             Some(user) => {
                 Ok(DovecotUser::from(user))
@@ -156,7 +157,7 @@ impl Authenticator {
         }
     }
 
-    fn credentials_verify(&self, username: &str, password: &str) -> std::result::Result<(), AuthError> {
+    fn credentials_verify(&self, username: &str, password: &str) -> result::Result<(), AuthError> {
         // credentials verify
         if self.config.cache_cleanup {
             db::delete_dead_hashes(self.config.cache_max_lifetime, &self.conn_pool, &self.config.cache_table)?;
@@ -208,7 +209,7 @@ impl Authenticator {
     }
 }
 
-fn credentials_from_fd(fd: i32) -> std::result::Result<(String, String), AuthError> {
+fn credentials_from_fd(fd: i32) -> result::Result<(String, String), AuthError> {
     let mut f = unsafe { File::from_raw_fd(fd) };
     let mut input = String::new();
     f.read_to_string(&mut input)?;
@@ -220,14 +221,7 @@ fn credentials_from_fd(fd: i32) -> std::result::Result<(String, String), AuthErr
     }
 }
 
-fn get_env_var(name: &str) -> String {
-    match std::env::var(name) {
-        Ok(value) => value,
-        Err(_) => String::new()
-    }
-}
-
-pub fn authenticate(fd: i32, config_file: &str, reply_bin: &str, test: bool) -> std::result::Result<(), AuthError> {
+pub fn authenticate(fd: i32, config_file: &str, reply_bin: &str, test: bool) -> result::Result<(), AuthError> {
     let config = Config::from_config_file(config_file)?;
     let conn_pool = db::get_conn_pool(&config.db_url)?;
     let authenticator = Authenticator {
@@ -238,9 +232,9 @@ pub fn authenticate(fd: i32, config_file: &str, reply_bin: &str, test: bool) -> 
     };
     let (username, password) = credentials_from_fd(fd)?;
     let user: DovecotUser = authenticator.credentials_lookup(&username)?;
-    if get_env_var("CREDENTIALS_LOOKUP") == "1" {
-        if get_env_var("AUTHORIZED") == "1" {
-            std::env::set_var("AUTHORIZED", "2");
+    if env::var("CREDENTIALS_LOOKUP").unwrap_or("".to_string()) == "1" {
+        if env::var("AUTHORIZED").unwrap_or("".to_string()) == "1" {
+            env::set_var("AUTHORIZED", "2");
         }
     } else {
         authenticator.credentials_verify(&username, &password)?;

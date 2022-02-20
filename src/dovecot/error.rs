@@ -11,7 +11,9 @@
 // You should have received a copy of the GNU General Public License
 // along with dovecot-nextcloud-auth.  If not, see <http://www.gnu.org/licenses/>.
 
+use std::{fmt,io,error};
 use config_file::ConfigFileError;
+use mysql;
 
 #[derive(Debug)]
 pub enum AuthError {
@@ -20,10 +22,10 @@ pub enum AuthError {
     TempError(String),
 }
 
-impl std::error::Error for AuthError {}
+impl error::Error for AuthError {}
 
-impl std::fmt::Display for AuthError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl fmt::Display for AuthError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             AuthError::PermError => write!(f, "PERMFAIL"),
             AuthError::NoUserError => write!(f, "NOUSER"),
@@ -38,8 +40,8 @@ impl From<ConfigFileError> for AuthError {
     }
 }
 
-impl From<std::io::Error> for AuthError {
-    fn from(error: std::io::Error) -> Self {
+impl From<io::Error> for AuthError {
+    fn from(error: io::Error) -> Self {
         AuthError::TempError(error.to_string().to_owned())
     }
 }

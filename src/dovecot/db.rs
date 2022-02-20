@@ -11,15 +11,16 @@
 // You should have received a copy of the GNU General Public License
 // along with dovecot-nextcloud-auth.  If not, see <http://www.gnu.org/licenses/>.
 
+use std::result;
 use std::collections::HashMap;
 use mysql::*;
 use mysql::prelude::*;
 
-pub fn get_conn_pool(url: &str) -> std::result::Result<Pool, mysql::error::Error> {
+pub fn get_conn_pool(url: &str) -> result::Result<Pool, mysql::error::Error> {
     Ok(Pool::new(Opts::from_url(url)?)?)
 }
 
-pub fn get_user(username: &str, pool: &Pool, user_query: &str, fields: &[&str]) -> std::result::Result<Option<HashMap<String, String>>, mysql::error::Error> {
+pub fn get_user(username: &str, pool: &Pool, user_query: &str, fields: &[&str]) -> result::Result<Option<HashMap<String, String>>, mysql::error::Error> {
     let mut conn = pool.get_conn()?;
     let stmt = conn.prep(user_query)?;
     match conn.exec_first(&stmt, params! { "username" => username.to_lowercase() })? {
@@ -45,7 +46,7 @@ pub fn get_user(username: &str, pool: &Pool, user_query: &str, fields: &[&str]) 
     }
 }
 
-pub fn get_hashes(username: &str, pool: &Pool, cache_table: &str, max_lifetime: i64) -> std::result::Result<Vec<(String, i64)>, mysql::error::Error> {
+pub fn get_hashes(username: &str, pool: &Pool, cache_table: &str, max_lifetime: i64) -> result::Result<Vec<(String, i64)>, mysql::error::Error> {
     let mut conn = pool.get_conn()?;
     let statement = format!(
         concat!("SELECT password, UNIX_TIMESTAMP() - UNIX_TIMESTAMP(last_verified) AS last_verified FROM {} ",
@@ -57,7 +58,7 @@ pub fn get_hashes(username: &str, pool: &Pool, cache_table: &str, max_lifetime: 
     Ok(hash_list)
 }
 
-pub fn save_hash(username: &str, password: &str, pool: &Pool, cache_table: &str) -> std::result::Result<(), mysql::error::Error> {
+pub fn save_hash(username: &str, password: &str, pool: &Pool, cache_table: &str) -> result::Result<(), mysql::error::Error> {
     let mut conn = pool.get_conn()?;
     let statement = format!(
         concat!("INSERT INTO {} (username, password, last_verified) ",
@@ -67,7 +68,7 @@ pub fn save_hash(username: &str, password: &str, pool: &Pool, cache_table: &str)
     conn.exec_drop(&stmt, params! { "username" => username.to_lowercase(), "password" => password })
 }
 
-pub fn delete_dead_hashes(max_lifetime: i64, pool: &Pool, cache_table: &str) -> std::result::Result<(), mysql::error::Error> {
+pub fn delete_dead_hashes(max_lifetime: i64, pool: &Pool, cache_table: &str) -> result::Result<(), mysql::error::Error> {
     let mut conn = pool.get_conn()?;
     let statement = format!("DELETE FROM {} WHERE UNIX_TIMESTAMP() - UNIX_TIMESTAMP(last_verified) > :max_lifetime", cache_table);
     let stmt = conn.prep(statement)?;
