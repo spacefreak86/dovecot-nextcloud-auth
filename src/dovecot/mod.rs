@@ -55,7 +55,7 @@ impl DovecotUser<'_> {
         let mut extra: Vec<&str> = Vec::new();
         let mut env: HashMap<String, String> = HashMap::new();
         for field in self.fields.keys() {
-            if self.fields[field].len() > 0 {
+            if self.fields[field].len() > 0 && USERDB_ENVVAR_MAP.contains_key(&field) {
                 let env_var = USERDB_ENVVAR_MAP[&field];
                 if env_var.starts_with("userdb_") {
                     extra.push(env_var);
