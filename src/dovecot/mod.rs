@@ -52,6 +52,10 @@ impl DovecotUser<'_> {
         user
     }
 
+    pub fn get_password(&self) -> &String {
+        &self.fields["password"]
+    }
+
     pub fn get_env(&self) -> HashMap<String, String> {
         let mut extra: Vec<&str> = Vec::new();
         let mut env_vars: HashMap<String, String> = HashMap::new();
@@ -112,19 +116,20 @@ struct Config {
     cache_table: String,
     user_query: String,
     nextcloud_url: String,
+    nextcloud_password_scheme: String,
     cache_verify_interval: i64,
     cache_max_lifetime: i64,
     cache_cleanup: bool,
 }
 
-struct Authenticator {
-    config: Config,
+struct Authenticator<'a> {
+    config: &'a Config,
     reply_bin: String,
     test: bool,
     conn_pool: mysql::Pool,
 }
 
-impl Authenticator {
+impl Authenticator<'_> {
     fn call_reply_bin(&self, user: &DovecotUser) -> result::Result<(), AuthError> {
         let c_reply_bin = CString::new(self.reply_bin.clone()).expect("CString::new failed");
         let mut skip_args = 1;
@@ -185,8 +190,8 @@ impl Authenticator {
                     let hash = match hashlib::get_matching_hash(&password, &expired_hashes) {
                         Some(h) => h,
                         None => {
-                            let salt: String = rand::thread_rng().sample_iter(&Alphanumeric).take(5).map(char::from).collect();
-                            hashlib::ssha512(&password, &salt)
+                            let salt: Vec<u8> = rand::thread_rng().sample_iter(&Alphanumeric).take(5).collect();
+                            hashlib::ssha512(password.as_bytes(), &salt)
                         }
                     };
                     db::save_hash(&username, &hash, &self.conn_pool, &self.config.cache_table)?;
@@ -226,7 +231,7 @@ pub fn authenticate(fd: i32, config_file: &str, reply_bin: &str, test: bool) -> 
     let config = Config::from_config_file(config_file)?;
     let conn_pool = db::get_conn_pool(&config.db_url)?;
     let authenticator = Authenticator {
-        config: config,
+        config: &config,
         reply_bin: reply_bin.to_string(),
         test: test,
         conn_pool: conn_pool,
@@ -237,9 +242,16 @@ pub fn authenticate(fd: i32, config_file: &str, reply_bin: &str, test: bool) -> 
         if env::var("AUTHORIZED").unwrap_or("".to_string()) == "1" {
             env::set_var("AUTHORIZED", "2");
         }
+        authenticator.call_reply_bin(&user)
     } else {
-        authenticator.credentials_verify(&username, &password)?;
+        let db_password = user.get_password();
+        if db_password.len() > 0 && !db_password.starts_with(&format!("{{{}}}", &config.nextcloud_password_scheme).to_string()) {
+            match hashlib::verify_hash(&password, &db_password) {
+                true => Ok(()),
+                false => Err(AuthError::PermError)
+            }
+        } else {
+            authenticator.credentials_verify(&username, &password)
+        }
     }
-
-    authenticator.call_reply_bin(&user)
 }

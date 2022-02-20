@@ -14,12 +14,12 @@
 use sha2::{Sha512, Digest};
 use base64;
 
-pub fn ssha512(password: &str, salt: &str) -> String {
+pub fn ssha512(password: &[u8], salt: &[u8]) -> String {
     let mut hasher = Sha512::new();
-    hasher.update(password.as_bytes());
-    hasher.update(salt.as_bytes());
+    hasher.update(password);
+    hasher.update(salt);
     let hash = hasher.finalize();
-    let salted_hash = [&hash, salt.as_bytes()].concat();
+    let salted_hash = [&hash, salt].concat();
     format!("{{SSHA512}}{}", base64::encode(salted_hash))
 }
 
@@ -28,8 +28,8 @@ pub fn verify_hash(password: &str, hash: &str) -> bool {
     if hash.starts_with("{SSHA512}") {
         let decoded_hash = base64::decode(hash.trim_start_matches("{SSHA512}"));
         if decoded_hash.is_ok() {
-            let salt: String = decoded_hash.unwrap()[64..].iter().map(|&c| c as char).collect();
-            hash1 = ssha512(password, &salt);
+            let salt = &decoded_hash.unwrap()[64..];
+            hash1 = ssha512(password.as_bytes(), &salt);
         } else {
             eprintln!("base64: unable to decode hash: {}", hash);
         }
