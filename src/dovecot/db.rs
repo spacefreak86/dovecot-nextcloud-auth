@@ -19,7 +19,7 @@ pub fn get_conn_pool(url: &str) -> std::result::Result<Pool, mysql::error::Error
     Ok(Pool::new(Opts::from_url(url)?)?)
 }
 
-pub fn get_user(username: &str, pool: &Pool, user_query: &str, wanted_fields: &Vec<&str>) -> std::result::Result<Option<HashMap<String, String>>, mysql::error::Error> {
+pub fn get_user(username: &str, pool: &Pool, user_query: &str, fields: &[&str]) -> std::result::Result<Option<HashMap<String, String>>, mysql::error::Error> {
     let mut conn = pool.get_conn()?;
     let stmt = conn.prep(user_query)?;
     match conn.exec_first(&stmt, params! { "username" => username.to_lowercase() })? {
@@ -28,7 +28,7 @@ pub fn get_user(username: &str, pool: &Pool, user_query: &str, wanted_fields: &V
             let mut user = HashMap::new();
             for column in row.columns_ref() {
                 let column_name = column.name_str();
-                if !wanted_fields.contains(&&column_name[..]) {
+                if !fields.contains(&&column_name[..]) {
                     continue;
                 } else if column_name == "uid" || column_name == "gid" {
                     user.insert(column_name.to_string(), from_value_opt::<i64>(row[column_name.as_ref()].clone())?.to_string());

@@ -11,9 +11,9 @@
 // You should have received a copy of the GNU General Public License
 // along with dovecot-nextcloud-auth.  If not, see <http://www.gnu.org/licenses/>.
 
-mod auth;
+mod dovecot;
 
-use auth::{nextcloud_auth, error::AuthError};
+use dovecot::{authenticate, error::AuthError};
 
 const ERR_PERMFAIL: i32 = 1;
 const ERR_NOUSER: i32 = 3;
@@ -50,7 +50,8 @@ fn main() {
             reply_bin = String::from(TEST_REPLY_BIN);
         }
     }
-    std::process::exit(match nextcloud_auth(fd, &format!("{}.toml", myname), &reply_bin, test) {
+
+    std::process::exit(match authenticate(fd, &format!("{}.toml", myname), &reply_bin, test) {
         Ok(()) => 0,
         Err(err) => {
             match err {
