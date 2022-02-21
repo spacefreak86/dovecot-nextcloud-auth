@@ -58,7 +58,7 @@ impl DovecotUser<'_> {
         let mut extra: Vec<&str> = Vec::new();
         let mut env_vars: HashMap<String, String> = HashMap::new();
         for field in USERDB_ENVVAR_MAP.keys() {
-            if self.fields[field].len() == 0 {
+            if self.fields[field].is_empty() {
                 continue;
             }
             let env_var = USERDB_ENVVAR_MAP[&field];
@@ -67,7 +67,7 @@ impl DovecotUser<'_> {
             }
             env_vars.insert(env_var.to_string(), self.fields[field].clone());
         }
-        if extra.len() > 0 {
+        if !extra.is_empty() {
             env_vars.insert("EXTRA".to_string(), extra.join(" "));
         }
         env_vars
