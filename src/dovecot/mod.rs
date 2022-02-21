@@ -30,10 +30,10 @@ pub struct DovecotUser<'a> {
     fields: HashMap<&'a str, String>,
 }
 
-pub const USER_FIELDS: [&str; 7] = ["username", "password", "home", "mail", "uid", "gid", "quota_rule"];
+pub const USER_FIELDS: [&str; 7] = ["user", "password", "home", "mail", "uid", "gid", "quota_rule"];
 
 static USERDB_ENVVAR_MAP: Map<&'static str, &'static str> = phf_map! {
-    "username"   => "USER",
+    "user"       => "USER",
     "home"       => "HOME",
     "mail"       => "userdb_mail",
     "uid"        => "userdb_uid",
@@ -50,8 +50,8 @@ impl DovecotUser<'_> {
         user
     }
 
-    pub fn get_password(&self) -> &String {
-        &self.fields["password"]
+    pub fn get(&self, field: &str) -> &String {
+        &self.fields[field]
     }
 
     pub fn get_env(&self) -> HashMap<String, String> {
@@ -79,7 +79,8 @@ impl From<HashMap<String, String>> for DovecotUser<'_> {
         let mut user = Self::new();
         for field in USER_FIELDS {
             if map.contains_key(field) {
-                user.fields.insert(field, map.get(field).unwrap().to_string());
+                let value = map.get(field).unwrap().to_string();
+                user.fields.insert(field, value);
             }
         }
         user
@@ -111,11 +112,13 @@ fn verify_webdav_credentials(username: &str, password: &str, url: &str) -> resul
 #[derive(Deserialize)]
 struct Config {
     db_url: String,
-    cache_table: String,
     user_query: String,
-    password_hash_scheme: String,
     update_password_query: String,
+    update_hash_scheme: String,
+    hash_scheme: String,
+    db_auth_hosts: Vec<String>,
     nextcloud_url: String,
+    cache_table: String,
     cache_verify_interval: i64,
     cache_max_lifetime: i64,
     cache_cleanup: bool,
@@ -163,7 +166,6 @@ impl Authenticator<'_> {
     }
 
     fn credentials_verify(&self, username: &str, password: &str) -> result::Result<(), AuthError> {
-        // credentials verify
         if self.config.cache_cleanup {
             db::delete_dead_hashes(self.config.cache_max_lifetime, &self.conn_pool, &self.config.cache_table)?;
         }
@@ -186,13 +188,17 @@ impl Authenticator<'_> {
             Ok(verify_ok) => {
                 // got authentication result from nextcloud
                 if verify_ok {
-                    let hash = match hashlib::get_matching_hash(&password, &expired_hashes) {
+                    let hash: String = match hashlib::get_matching_hash(&password, &expired_hashes) {
                         Some(h) => h,
                         None => {
-                            hashlib::hash(&password, "SSHA512").unwrap()
+                            hashlib::hash(&password, &self.config.hash_scheme).unwrap_or("".to_string())
                         }
                     };
-                    db::save_hash(&username, &hash, &self.conn_pool, &self.config.cache_table)?;
+                    if hash.is_empty() {
+                        eprintln!("config: hash_scheme: invalid scheme '{}'", &self.config.hash_scheme);
+                    } else {
+                        db::save_hash(&username, &hash, &self.conn_pool, &self.config.cache_table)?;
+                    }
                     Ok(())
                 } else {
                     Err(AuthError::PermError)
@@ -235,30 +241,33 @@ pub fn authenticate(fd: i32, config_file: &str, reply_bin: &str, test: bool) -> 
         conn_pool: conn_pool,
     };
     let (username, password) = credentials_from_fd(fd)?;
-    let user: DovecotUser = authenticator.credentials_lookup(&username)?;
+    let user: DovecotUser = authenticator.credentials_lookup(&username.to_lowercase())?;
     if env::var("CREDENTIALS_LOOKUP").unwrap_or("".to_string()) == "1" {
         if env::var("AUTHORIZED").unwrap_or("".to_string()) == "1" {
             env::set_var("AUTHORIZED", "2");
         }
     } else {
-        let db_password = user.get_password();
-        if !config.password_hash_scheme.is_empty() && !db_password.is_empty() && !db_password.starts_with(&format!("{{{}}}", &config.password_hash_scheme).to_string()) {
-            if hashlib::verify_hash(&password, &db_password) {
-                if !config.update_password_query.is_empty() {
-                    match hashlib::hash(&password, &config.password_hash_scheme) {
-                        Some(hash) => {
-                            db::update_password(&username, &hash, &authenticator.conn_pool, &config.update_password_query)?;
-                        },
-                        None => {
-                            eprintln!("unable to update password hash: invalid scheme '{}'", &config.password_hash_scheme);
-                        }
+        let pw_hash: &String = user.get("password");
+        if !pw_hash.is_empty() && !config.update_password_query.is_empty() && !config.update_hash_scheme.is_empty() {
+            let hash_prefix: String = format!("{{{}}}", &config.update_hash_scheme);
+            if pw_hash.starts_with(&hash_prefix) && hashlib::verify_hash(&password, &pw_hash) {
+                match hashlib::hash(&password, &config.hash_scheme) {
+                    Some(hash) => {
+                        db::update_password(&user.get("user"), &hash, &authenticator.conn_pool, &config.update_password_query)?;
+                    },
+                    None => {
+                        eprintln!("config: hash_scheme: invalid scheme '{}'", &config.hash_scheme);
                     }
                 }
-            } else {
+            }
+        }
+        let remote_ip = env::var("REMOTE_IP").unwrap_or("".to_string());
+        if !remote_ip.is_empty() && !pw_hash.is_empty() && config.db_auth_hosts.contains(&remote_ip) {
+            if !hashlib::verify_hash(&password, &pw_hash) {
                 return Err(AuthError::PermError);
             }
         } else {
-            authenticator.credentials_verify(&username, &password)?
+            authenticator.credentials_verify(&user.get("user"), &password)?
         }
     }
     authenticator.call_reply_bin(&user)

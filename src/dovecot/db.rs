@@ -23,7 +23,7 @@ pub fn get_conn_pool(url: &str) -> result::Result<Pool, mysql::error::Error> {
 pub fn get_user(username: &str, pool: &Pool, user_query: &str, fields: &[&str]) -> result::Result<Option<HashMap<String, String>>, mysql::error::Error> {
     let mut conn = pool.get_conn()?;
     let stmt = conn.prep(user_query)?;
-    match conn.exec_first(&stmt, params! { "username" => username.to_lowercase() })? {
+    match conn.exec_first(&stmt, params! { "username" => username })? {
         Some(res) => {
             let row: Row = res;
             let mut user = HashMap::new();
@@ -38,7 +38,7 @@ pub fn get_user(username: &str, pool: &Pool, user_query: &str, fields: &[&str]) 
                 }
             }
             if !user.contains_key("user") {
-                user.insert(String::from("user"), username.to_lowercase());
+                user.insert("user".to_string(), username.to_string());
             }
             Ok(Some(user))
         },
@@ -49,7 +49,7 @@ pub fn get_user(username: &str, pool: &Pool, user_query: &str, fields: &[&str]) 
 pub fn update_password(username: &str, password: &str, pool: &Pool, update_query: &str) -> result::Result<(), mysql::error::Error> {
     let mut conn = pool.get_conn()?;
     let stmt = conn.prep(update_query)?;
-    conn.exec_drop(&stmt, params! { "username" => username.to_lowercase(), "password" => password })
+    conn.exec_drop(&stmt, params! { "username" => username, "password" => password })
 }
 
 pub fn get_hashes(username: &str, pool: &Pool, cache_table: &str, max_lifetime: i64) -> result::Result<Vec<(String, i64)>, mysql::error::Error> {
@@ -59,7 +59,7 @@ pub fn get_hashes(username: &str, pool: &Pool, cache_table: &str, max_lifetime: 
                 "WHERE username = :username AND UNIX_TIMESTAMP() - UNIX_TIMESTAMP(last_verified) <= :max_lifetime ORDER BY last_verified"),
         cache_table);
     let stmt = conn.prep(statement)?;
-    let hash_list: Vec<(String, i64)> = conn.exec_map(&stmt, params! { "username" => username.to_lowercase(), "max_lifetime" => max_lifetime },
+    let hash_list: Vec<(String, i64)> = conn.exec_map(&stmt, params! { "username" => username, "max_lifetime" => max_lifetime },
                                                       |row: Row| ( from_value(row["password"].clone()), from_value(row["last_verified"].clone()) ))?;
     Ok(hash_list)
 }
@@ -71,7 +71,7 @@ pub fn save_hash(username: &str, password: &str, pool: &Pool, cache_table: &str)
                 "VALUES (:username, :password, NOW()) ON DUPLICATE KEY UPDATE last_verified = NOW()"),
         cache_table);
     let stmt = conn.prep(statement)?;
-    conn.exec_drop(&stmt, params! { "username" => username.to_lowercase(), "password" => password })
+    conn.exec_drop(&stmt, params! { "username" => username, "password" => password })
 }
 
 pub fn delete_dead_hashes(max_lifetime: i64, pool: &Pool, cache_table: &str) -> result::Result<(), mysql::error::Error> {
