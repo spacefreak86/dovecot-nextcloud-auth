@@ -51,7 +51,7 @@ fn main() {
         }
     }
 
-    std::process::exit(match authenticate(fd, &format!("{}.toml", myname), &reply_bin, test) {
+    std::process::exit(match authenticate(fd, &format!("{}.toml", args[0]), &reply_bin, test) {
         Ok(()) => 0,
         Err(err) => {
             match err {
