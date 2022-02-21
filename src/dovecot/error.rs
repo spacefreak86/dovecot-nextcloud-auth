@@ -36,18 +36,18 @@ impl fmt::Display for AuthError {
 
 impl From<ConfigFileError> for AuthError {
     fn from(error: ConfigFileError) -> Self {
-        AuthError::TempError(error.to_string().to_owned())
+        AuthError::TempError(error.to_string())
     }
 }
 
 impl From<io::Error> for AuthError {
     fn from(error: io::Error) -> Self {
-        AuthError::TempError(error.to_string().to_owned())
+        AuthError::TempError(error.to_string())
     }
 }
 
 impl From<mysql::Error> for AuthError {
     fn from(error: mysql::Error) -> Self {
-        AuthError::TempError(error.to_string().to_owned())
+        AuthError::TempError(error.to_string())
     }
 }

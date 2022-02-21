@@ -96,14 +96,14 @@ fn verify_webdav_credentials(username: &str, password: &str, url: &str) -> resul
             if code == 207 {
                 Ok(true)
             } else {
-                Err(AuthError::TempError(format!("unexpected http response: {} {}", code, res.status_text()).to_owned()))
+                Err(AuthError::TempError(format!("unexpected http response: {} {}", code, res.status_text())))
             }
         },
         Err(ureq::Error::Status(code, res)) => {
             if code == 401 {
                 Ok(false)
             } else {
-                Err(AuthError::TempError(format!("unexpected http error response: {} {}", code, res.status_text()).to_owned()))
+                Err(AuthError::TempError(format!("unexpected http error response: {} {}", code, res.status_text())))
             }
         },
         Err(err) => Err(AuthError::TempError(format!("unable to reach server: {}", err.to_string())))
@@ -223,7 +223,7 @@ fn credentials_from_fd(fd: i32) -> result::Result<(String, String), AuthError> {
     if credentials.len() >= 2 {
         Ok((credentials[0].to_string(), credentials[1].to_string()))
     } else {
-        Err(AuthError::TempError(format!("did not receive credentials on fd {}", fd).to_owned()))
+        Err(AuthError::TempError(format!("did not receive credentials on fd {}", fd)))
     }
 }
 
