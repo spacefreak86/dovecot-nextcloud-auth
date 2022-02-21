@@ -23,6 +23,12 @@ pub fn ssha512(password: &[u8], salt: &[u8]) -> String {
     format!("{{SSHA512}}{}", base64::encode(salted_hash))
 }
 
+pub fn sha512(password: &[u8]) -> String {
+    let mut hasher = Sha512::new();
+    hasher.update(password);
+    let hash = hasher.finalize();
+}
+
 pub fn verify_hash(password: &str, hash: &str) -> bool {
     let mut hash1 = String::new();
     if hash.starts_with("{SSHA512}") {
@@ -33,6 +39,9 @@ pub fn verify_hash(password: &str, hash: &str) -> bool {
         } else {
             eprintln!("base64: unable to decode hash: {}", hash);
         }
+    } else if hash.starts_with("{SHA512}") {
+        hash1 = sha512(password.as_bytes());
+        println!("hash1: {}", hash1);
     } else {
         eprintln!("unknown hash type: {}", hash);
     }
