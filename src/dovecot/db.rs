@@ -46,6 +46,12 @@ pub fn get_user(username: &str, pool: &Pool, user_query: &str, fields: &[&str]) 
     }
 }
 
+pub fn update_password(username: &str, password: &str, pool: &Pool, update_query: &str) -> result::Result<(), mysql::error::Error> {
+    let mut conn = pool.get_conn()?;
+    let stmt = conn.prep(update_query)?;
+    conn.exec_drop(&stmt, params! { "username" => username.to_lowercase(), "password" => password })
+}
+
 pub fn get_hashes(username: &str, pool: &Pool, cache_table: &str, max_lifetime: i64) -> result::Result<Vec<(String, i64)>, mysql::error::Error> {
     let mut conn = pool.get_conn()?;
     let statement = format!(

@@ -11,10 +11,12 @@
 // You should have received a copy of the GNU General Public License
 // along with dovecot-nextcloud-auth.  If not, see <http://www.gnu.org/licenses/>.
 
-use sha2::{Sha512, Digest};
 use base64;
+use sha2::{Sha512, Digest};
+use rand::Rng;
+use rand::distributions::Alphanumeric;
 
-pub fn ssha512(password: &[u8], salt: &[u8]) -> String {
+fn ssha512(password: &[u8], salt: &[u8]) -> String {
     let mut hasher = Sha512::new();
     hasher.update(password);
     hasher.update(salt);
@@ -23,10 +25,22 @@ pub fn ssha512(password: &[u8], salt: &[u8]) -> String {
     format!("{{SSHA512}}{}", base64::encode(salted_hash))
 }
 
-pub fn sha512(password: &[u8]) -> String {
+fn sha512(password: &[u8]) -> String {
     let mut hasher = Sha512::new();
     hasher.update(password);
     let hash = hasher.finalize();
+    format!("{{SHA512}}{}", base64::encode(hash))
+}
+
+pub fn hash(password: &str, scheme: &str) -> Option<String> {
+    match scheme {
+        "SSHA512" => {
+            let salt: Vec<u8> = rand::thread_rng().sample_iter(&Alphanumeric).take(5).collect();
+            Some(ssha512(password.as_bytes(), &salt))
+        },
+        "SHA512" => Some(sha512(password.as_bytes())),
+        _ => None
+    }
 }
 
 pub fn verify_hash(password: &str, hash: &str) -> bool {
@@ -41,7 +55,6 @@ pub fn verify_hash(password: &str, hash: &str) -> bool {
         }
     } else if hash.starts_with("{SHA512}") {
         hash1 = sha512(password.as_bytes());
-        println!("hash1: {}", hash1);
     } else {
         eprintln!("unknown hash type: {}", hash);
     }

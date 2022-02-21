@@ -22,8 +22,6 @@ use std::{result,env};
 use config_file::FromConfigFile;
 use serde::Deserialize;
 use nix::unistd::execvp;
-use rand::Rng;
-use rand::distributions::Alphanumeric;
 use phf::{phf_map, Map};
 use ureq;
 use error::AuthError;
@@ -115,8 +113,9 @@ struct Config {
     db_url: String,
     cache_table: String,
     user_query: String,
+    password_hash_scheme: String,
+    update_password_query: String,
     nextcloud_url: String,
-    nextcloud_password_scheme: String,
     cache_verify_interval: i64,
     cache_max_lifetime: i64,
     cache_cleanup: bool,
@@ -190,8 +189,7 @@ impl Authenticator<'_> {
                     let hash = match hashlib::get_matching_hash(&password, &expired_hashes) {
                         Some(h) => h,
                         None => {
-                            let salt: Vec<u8> = rand::thread_rng().sample_iter(&Alphanumeric).take(5).collect();
-                            hashlib::ssha512(password.as_bytes(), &salt)
+                            hashlib::hash(&password, "SSHA512").unwrap()
                         }
                     };
                     db::save_hash(&username, &hash, &self.conn_pool, &self.config.cache_table)?;
@@ -244,8 +242,19 @@ pub fn authenticate(fd: i32, config_file: &str, reply_bin: &str, test: bool) -> 
         }
     } else {
         let db_password = user.get_password();
-        if db_password.len() > 0 && !db_password.starts_with(&format!("{{{}}}", &config.nextcloud_password_scheme).to_string()) {
-            if !hashlib::verify_hash(&password, &db_password) {
+        if !config.password_hash_scheme.is_empty() && !db_password.is_empty() && !db_password.starts_with(&format!("{{{}}}", &config.password_hash_scheme).to_string()) {
+            if hashlib::verify_hash(&password, &db_password) {
+                if !config.update_password_query.is_empty() {
+                    match hashlib::hash(&password, &config.password_hash_scheme) {
+                        Some(hash) => {
+                            db::update_password(&username, &hash, &authenticator.conn_pool, &config.update_password_query)?;
+                        },
+                        None => {
+                            eprintln!("unable to update password hash: invalid scheme '{}'", &config.password_hash_scheme);
+                        }
+                    }
+                }
+            } else {
                 return Err(AuthError::PermError);
             }
         } else {
