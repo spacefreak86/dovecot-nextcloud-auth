@@ -242,16 +242,15 @@ pub fn authenticate(fd: i32, config_file: &str, reply_bin: &str, test: bool) -> 
         if env::var("AUTHORIZED").unwrap_or("".to_string()) == "1" {
             env::set_var("AUTHORIZED", "2");
         }
-        authenticator.call_reply_bin(&user)
     } else {
         let db_password = user.get_password();
         if db_password.len() > 0 && !db_password.starts_with(&format!("{{{}}}", &config.nextcloud_password_scheme).to_string()) {
-            match hashlib::verify_hash(&password, &db_password) {
-                true => Ok(()),
-                false => Err(AuthError::PermError)
+            if !hashlib::verify_hash(&password, &db_password) {
+                return Err(AuthError::PermError);
             }
         } else {
-            authenticator.credentials_verify(&username, &password)
+            authenticator.credentials_verify(&username, &password)?
         }
     }
+    authenticator.call_reply_bin(&user)
 }
