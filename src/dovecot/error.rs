@@ -29,7 +29,7 @@ impl fmt::Display for AuthError {
         match self {
             AuthError::PermError => write!(f, "PERMFAIL"),
             AuthError::NoUserError => write!(f, "NOUSER"),
-            AuthError::TempError(msg) => write!(f, "TEMPFAIL: {}", msg),
+            AuthError::TempError(msg) => write!(f, "{}", msg),
         }
     }
 }
