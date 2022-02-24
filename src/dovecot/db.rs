@@ -74,6 +74,13 @@ pub fn save_hash(username: &str, password: &str, pool: &Pool, cache_table: &str)
     conn.exec_drop(&stmt, params! { "username" => username, "password" => password })
 }
 
+pub fn delete_hash(username: &str, password: &str, pool: &Pool, cache_table: &str) -> result::Result<(), mysql::error::Error> {
+    let mut conn = pool.get_conn()?;
+    let statement = format!("DELETE FROM {} WHERE username = :username AND password = :password", cache_table);
+    let stmt = conn.prep(statement)?;
+    conn.exec_drop(&stmt, params! { "username" => username, "password" => password })
+}
+
 pub fn delete_dead_hashes(max_lifetime: i64, pool: &Pool, cache_table: &str) -> result::Result<(), mysql::error::Error> {
     let mut conn = pool.get_conn()?;
     let statement = format!("DELETE FROM {} WHERE UNIX_TIMESTAMP() - UNIX_TIMESTAMP(last_verified) > :max_lifetime", cache_table);
