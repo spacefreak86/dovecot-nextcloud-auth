@@ -242,8 +242,8 @@ impl Authenticator<'_> {
                     Ok(())
                 } else {
                     let invalid_hash = hashlib::get_matching_hash(password, &expired_hashes);
-                    if invalid_hash.is_some() {
-                        db::delete_hash(username, &invalid_hash.unwrap(), &self.conn_pool, &self.config.cache_table)?;
+                    if let Some(hash) = invalid_hash {
+                        db::delete_hash(username, &hash, &self.conn_pool, &self.config.cache_table)?;
                     }
                     Err(AuthError::Perm)
                 }
