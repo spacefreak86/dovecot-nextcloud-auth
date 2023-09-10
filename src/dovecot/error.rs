@@ -17,9 +17,9 @@ use mysql;
 
 #[derive(Debug)]
 pub enum AuthError {
-    PermError,
-    NoUserError,
-    TempError(String),
+    Perm,
+    NoUser,
+    Temp(String),
 }
 
 impl error::Error for AuthError {}
@@ -27,27 +27,27 @@ impl error::Error for AuthError {}
 impl fmt::Display for AuthError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            AuthError::PermError => write!(f, "PERMFAIL"),
-            AuthError::NoUserError => write!(f, "NOUSER"),
-            AuthError::TempError(msg) => write!(f, "{}", msg),
+            AuthError::Perm => write!(f, "PERMFAIL"),
+            AuthError::NoUser => write!(f, "NOUSER"),
+            AuthError::Temp(msg) => write!(f, "{}", msg),
         }
     }
 }
 
 impl From<ConfigFileError> for AuthError {
     fn from(error: ConfigFileError) -> Self {
-        AuthError::TempError(error.to_string())
+        AuthError::Temp(error.to_string())
     }
 }
 
 impl From<io::Error> for AuthError {
     fn from(error: io::Error) -> Self {
-        AuthError::TempError(error.to_string())
+        AuthError::Temp(error.to_string())
     }
 }
 
 impl From<mysql::Error> for AuthError {
     fn from(error: mysql::Error) -> Self {
-        AuthError::TempError(error.to_string())
+        AuthError::Temp(error.to_string())
     }
 }

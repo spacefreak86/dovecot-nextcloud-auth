@@ -55,19 +55,19 @@ fn main() {
         Ok(()) => 0,
         Err(err) => {
             match err {
-                AuthError::PermError => {
+                AuthError::Perm => {
                     if test {
                         eprintln!("{}", err);
                     }
                     ERR_PERMFAIL
                 },
-                AuthError::NoUserError => {
+                AuthError::NoUser => {
                     if test {
                         eprintln!("{}", err);
                     }
                     ERR_NOUSER
                 },
-                AuthError::TempError(errmsg) => {
+                AuthError::Temp(errmsg) => {
                     eprintln!("{}", errmsg);
                     ERR_TEMPFAIL
                 },

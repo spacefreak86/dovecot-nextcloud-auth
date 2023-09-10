@@ -17,7 +17,7 @@ use mysql::*;
 use mysql::prelude::*;
 
 pub fn get_conn_pool(url: &str) -> result::Result<Pool, mysql::error::Error> {
-    Ok(Pool::new(Opts::from_url(url)?)?)
+    Pool::new(Opts::from_url(url)?)
 }
 
 pub fn get_user(username: &str, pool: &Pool, user_query: &str, fields: &[&str]) -> result::Result<Option<HashMap<String, String>>, mysql::error::Error> {

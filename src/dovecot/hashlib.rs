@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License
 // along with dovecot-nextcloud-auth.  If not, see <http://www.gnu.org/licenses/>.
 
-use base64;
+use base64::{Engine as _, engine::general_purpose};
 use sha2::{Sha512, Digest};
 use rand::Rng;
 use rand::distributions::Alphanumeric;
@@ -22,15 +22,17 @@ fn ssha512(password: &[u8], salt: &[u8]) -> String {
     hasher.update(salt);
     let hash = hasher.finalize();
     let salted_hash = [&hash, salt].concat();
-    format!("{{SSHA512}}{}", base64::encode(salted_hash))
+    format!("{{SSHA512}}{}", general_purpose::STANDARD.encode(salted_hash))
 }
 
 fn sha512(password: &[u8]) -> String {
     let mut hasher = Sha512::new();
     hasher.update(password);
     let hash = hasher.finalize();
-    format!("{{SHA512}}{}", base64::encode(hash))
+    format!("{{SHA512}}{}", general_purpose::STANDARD.encode(hash))
 }
+
+
 
 pub fn hash(password: &str, scheme: &str) -> Option<String> {
     match scheme {
@@ -46,19 +48,16 @@ pub fn hash(password: &str, scheme: &str) -> Option<String> {
 pub fn verify_hash(password: &str, hash: &str) -> bool {
     let mut hash1 = String::new();
     if hash.starts_with("{SSHA512}") {
-        let decoded_hash = base64::decode(hash.trim_start_matches("{SSHA512}"));
-        if decoded_hash.is_ok() {
-            let salt = &decoded_hash.unwrap()[64..];
-            hash1 = ssha512(password.as_bytes(), &salt);
-        } else {
-            eprintln!("base64: unable to decode hash: {}", hash);
+        match general_purpose::STANDARD.decode(hash.trim_start_matches("{SSHA512}")) {
+            Ok(salt) => hash1 = ssha512(password.as_bytes(), &salt),
+            _ => eprintln!("base64: unable to decode hash: {}", hash),
         }
     } else if hash.starts_with("{SHA512}") {
         hash1 = sha512(password.as_bytes());
     } else {
         eprintln!("unknown hash type: {}", hash);
     }
-    return hash == hash1
+    hash == hash1
 }
 
 pub fn get_matching_hash(password: &str, hash_list: &Vec<String>) -> Option<String> {

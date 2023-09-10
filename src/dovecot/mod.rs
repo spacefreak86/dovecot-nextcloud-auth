@@ -15,6 +15,7 @@ pub mod error;
 mod db;
 mod hashlib;
 
+use base64::{Engine as _, engine::general_purpose};
 use std::collections::HashMap;
 use std::{fs::File, io::Read, os::unix::io::FromRawFd, };
 use std::ffi::CString;
@@ -22,65 +23,108 @@ use std::{result,env};
 use config_file::FromConfigFile;
 use serde::Deserialize;
 use nix::unistd::execvp;
-use phf::{phf_map, Map};
-use ureq;
 use error::AuthError;
 
-pub struct DovecotUser<'a> {
-    fields: HashMap<&'a str, String>,
+
+#[derive(Eq, PartialEq, Hash)]
+enum UserField {
+    User,
+    Password,
+    Home,
+    Mail,
+    Uid,
+    Gid,
+    QuotaRule,
 }
 
-pub const USER_FIELDS: [&str; 7] = ["user", "password", "home", "mail", "uid", "gid", "quota_rule"];
+impl TryFrom<&str> for UserField {
+    type Error = AuthError;
 
-static USERDB_ENVVAR_MAP: Map<&'static str, &'static str> = phf_map! {
-    "user"       => "USER",
-    "home"       => "HOME",
-    "mail"       => "userdb_mail",
-    "uid"        => "userdb_uid",
-    "gid"        => "userdb_gid",
-    "quota_rule" => "userdb_quota_rule",
-};
-
-impl DovecotUser<'_> {
-    pub fn new() -> Self {
-        let mut user = Self { fields: HashMap::new() };
-        for field in USER_FIELDS {
-            user.fields.insert(field, String::new());
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "user" => Ok(Self::User),
+            "password" => Ok(Self::Password),
+            "home" => Ok(Self::Home),
+            "mail" => Ok(Self::Mail),
+            "uid" => Ok(Self::Uid),
+            "gid" => Ok(Self::Gid),
+            "quota_rule" => Ok(Self::QuotaRule),
+            _ => Err(AuthError::Temp("invalid field name".to_string())),
         }
-        user
+    }
+}
+
+#[derive(Default)]
+struct DovecotUser {
+    user: String,
+    password: String,
+    home: Option<String>,
+    mail: Option<String>,
+    uid: Option<String>,
+    gid: Option<String>,
+    quota_rule: Option<String>,
+}
+
+impl DovecotUser {
+    fn new() -> Self {
+        Self::default()
     }
 
-    pub fn get(&self, field: &str) -> &String {
-        &self.fields[field]
+    fn value_mut(&mut self, field: UserField) -> &mut String {
+        match field {
+            UserField::User => &mut self.user,
+            UserField::Password => &mut self.password,
+            UserField::Home => self.home.get_or_insert(String::new()),
+            UserField::Mail => self.mail.get_or_insert(String::new()),
+            UserField::Uid => self.uid.get_or_insert(String::new()),
+            UserField::Gid => self.gid.get_or_insert(String::new()),
+            UserField::QuotaRule => self.quota_rule.get_or_insert(String::new()),
+        }
     }
 
-    pub fn get_env(&self) -> HashMap<String, String> {
+    pub fn get_env_vars(&self) -> HashMap<&str, String> {
         let mut extra: Vec<&str> = Vec::new();
-        let mut env_vars: HashMap<String, String> = HashMap::new();
-        for field in USERDB_ENVVAR_MAP.keys() {
-            if self.fields[field].is_empty() {
-                continue;
-            }
-            let env_var = USERDB_ENVVAR_MAP[&field];
-            if env_var.starts_with("userdb_") {
-                extra.push(env_var);
-            }
-            env_vars.insert(env_var.to_string(), self.fields[field].clone());
+        let mut map: HashMap<&str, String> = HashMap::new();
+
+        map.insert("USER", self.user.clone());
+
+        if let Some(home) = self.home.clone() {
+            map.insert("HOME", home);
         }
+
+        if let Some(mail) = self.mail.clone() {
+            map.insert("userdb_mail", mail);
+            extra.push("userdb_mail");
+        }
+
+        if let Some(uid) = self.uid.clone() {
+            map.insert("userdb_uid", uid);
+            extra.push("userdb_uid");
+        }
+
+        if let Some(gid) = self.gid.clone() {
+            map.insert("userdb_gid", gid);
+            extra.push("userdb_gid");
+        }
+
+        if let Some(quota_rule) = self.quota_rule.clone() {
+            map.insert("userdb_quota_rule", quota_rule);
+            extra.push("userdb_quota_rule");
+        }
+
         if !extra.is_empty() {
-            env_vars.insert("EXTRA".to_string(), extra.join(" "));
+            map.insert("EXTRA", extra.join(" "));
         }
-        env_vars
+        map
     }
 }
 
-impl From<HashMap<String, String>> for DovecotUser<'_> {
+impl From<HashMap<String, String>> for DovecotUser {
     fn from(map: HashMap<String, String>) -> Self {
         let mut user = Self::new();
-        for field in USER_FIELDS {
-            if map.contains_key(field) {
-                let value = map.get(field).unwrap().to_string();
-                user.fields.insert(field, value);
+        for (key, value) in map.into_iter() {
+            if let Ok(field) = UserField::try_from(key.as_str()) {
+                *user.value_mut(field) = value;
             }
         }
         user
@@ -88,24 +132,24 @@ impl From<HashMap<String, String>> for DovecotUser<'_> {
 }
 
 fn verify_webdav_credentials(username: &str, password: &str, url: &str) -> result::Result<bool, AuthError> {
-    let authorization = String::from("Basic ") + &base64::encode(format!("{}:{}", username, password));
-    match ureq::request("PROPFIND", &url).set("Authorization", &authorization).call() {
+    let authorization = String::from("Basic ") + &general_purpose::STANDARD.encode(format!("{}:{}", username, password));
+    match ureq::request("PROPFIND", url).set("Authorization", &authorization).call() {
         Ok(res) => {
             let code = res.status();
             if code == 207 {
                 Ok(true)
             } else {
-                Err(AuthError::TempError(format!("unexpected http response: {} {}", code, res.status_text())))
+                Err(AuthError::Temp(format!("unexpected http response: {} {}", code, res.status_text())))
             }
         },
         Err(ureq::Error::Status(code, res)) => {
             if code == 401 {
                 Ok(false)
             } else {
-                Err(AuthError::TempError(format!("unexpected http error response: {} {}", code, res.status_text())))
+                Err(AuthError::Temp(format!("unexpected http error response: {} {}", code, res.status_text())))
             }
         },
-        Err(err) => Err(AuthError::TempError(format!("unable to reach server: {}", err.to_string())))
+        Err(err) => Err(AuthError::Temp(format!("unable to reach server: {}", err)))
     }
 }
 
@@ -144,24 +188,20 @@ impl Authenticator<'_> {
             c_args.push(CString::new(arg).expect("CString:: new failed"));
         }
 
-        for (env_var, value) in user.get_env() {
+        for (env_var, value) in user.get_env_vars() {
             env::set_var(env_var, value);
         }
 
         match execvp(&c_reply_bin, &c_args) {
             Ok(_) => Ok(()),
-            Err(err) => Err(AuthError::TempError(format!("unable to call reply binary: {}", err.desc())))
+            Err(err) => Err(AuthError::Temp(format!("unable to call reply binary: {}", err.desc())))
         }
     }
 
     fn credentials_lookup(&self, username: &str) -> result::Result<DovecotUser, AuthError> {
-        match db::get_user(&username, &self.conn_pool, &self.config.user_query, &USER_FIELDS)? {
-            Some(user) => {
-                Ok(DovecotUser::from(user))
-            },
-            None => {
-                Err(AuthError::NoUserError)
-            }
+        match db::get_user(username, &self.conn_pool, &self.config.user_query, &["user", "password", "home", "mail", "uid", "gid", "quota_rule"])? {
+            Some(user) => Ok(DovecotUser::from(user)),
+            None => Err(AuthError::NoUser)
         }
     }
 
@@ -171,7 +211,7 @@ impl Authenticator<'_> {
         }
         let mut verified_hashes: Vec<String> = Vec::new();
         let mut expired_hashes: Vec<String> = Vec::new();
-        for (hash, last_verify) in db::get_hashes(&username, &self.conn_pool, &self.config.cache_table, self.config.cache_max_lifetime)? {
+        for (hash, last_verify) in db::get_hashes(username, &self.conn_pool, &self.config.cache_table, self.config.cache_max_lifetime)? {
             if last_verify <= self.config.cache_verify_interval {
                 verified_hashes.push(hash);
             } else if last_verify > self.config.cache_verify_interval && last_verify <= self.config.cache_max_lifetime {
@@ -179,43 +219,43 @@ impl Authenticator<'_> {
             }
         }
 
-        if hashlib::get_matching_hash(&password, &verified_hashes).is_some() {
+        if hashlib::get_matching_hash(password, &verified_hashes).is_some() {
             return Ok(())
         }
 
         let url = format!("{}/remote.php/dav/files/{}", self.config.nextcloud_url, username);
-        match verify_webdav_credentials(&username, &password, &url) {
+        match verify_webdav_credentials(username, password, &url) {
             Ok(verify_ok) => {
                 // got authentication result from nextcloud
                 if verify_ok {
-                    let hash: String = match hashlib::get_matching_hash(&password, &expired_hashes) {
+                    let hash: String = match hashlib::get_matching_hash(password, &expired_hashes) {
                         Some(h) => h,
                         None => {
-                            hashlib::hash(&password, &self.config.hash_scheme).unwrap_or("".to_string())
+                            hashlib::hash(password, &self.config.hash_scheme).unwrap_or("".to_string())
                         }
                     };
                     if hash.is_empty() {
                         eprintln!("config: hash_scheme: invalid scheme '{}'", &self.config.hash_scheme);
                     } else {
-                        db::save_hash(&username, &hash, &self.conn_pool, &self.config.cache_table)?;
+                        db::save_hash(username, &hash, &self.conn_pool, &self.config.cache_table)?;
                     }
                     Ok(())
                 } else {
-                    let invalid_hash = hashlib::get_matching_hash(&password, &expired_hashes);
+                    let invalid_hash = hashlib::get_matching_hash(password, &expired_hashes);
                     if invalid_hash.is_some() {
-                        db::delete_hash(&username, &invalid_hash.unwrap(), &self.conn_pool, &self.config.cache_table)?;
+                        db::delete_hash(username, &invalid_hash.unwrap(), &self.conn_pool, &self.config.cache_table)?;
                     }
-                    Err(AuthError::PermError)
+                    Err(AuthError::Perm)
                 }
             },
             Err(err) => {
-                eprintln!("{}", err.to_string());
-                match hashlib::get_matching_hash(&password, &expired_hashes) {
+                eprintln!("{}", err);
+                match hashlib::get_matching_hash(password, &expired_hashes) {
                     Some(_) => {
                         Ok(())
                     },
                     None => {
-                        Err(AuthError::PermError)
+                        Err(AuthError::Perm)
                     }
                 }
             }
@@ -227,11 +267,11 @@ fn credentials_from_fd(fd: i32) -> result::Result<(String, String), AuthError> {
     let mut f = unsafe { File::from_raw_fd(fd) };
     let mut input = String::new();
     f.read_to_string(&mut input)?;
-    let credentials: Vec<&str> = input.split("\0").collect();
+    let credentials: Vec<&str> = input.split('\0').collect();
     if credentials.len() >= 2 {
         Ok((credentials[0].to_string(), credentials[1].to_string()))
     } else {
-        Err(AuthError::TempError(format!("did not receive credentials on fd {}", fd)))
+        Err(AuthError::Temp(format!("did not receive credentials on fd {}", fd)))
     }
 }
 
@@ -241,8 +281,8 @@ pub fn authenticate(fd: i32, config_file: &str, reply_bin: &str, test: bool) -> 
     let authenticator = Authenticator {
         config: &config,
         reply_bin: reply_bin.to_string(),
-        test: test,
-        conn_pool: conn_pool,
+        test,
+        conn_pool,
     };
     let (username, password) = credentials_from_fd(fd)?;
     let user: DovecotUser = authenticator.credentials_lookup(&username.to_lowercase())?;
@@ -251,13 +291,12 @@ pub fn authenticate(fd: i32, config_file: &str, reply_bin: &str, test: bool) -> 
             env::set_var("AUTHORIZED", "2");
         }
     } else {
-        let pw_hash: &String = user.get("password");
-        if !pw_hash.is_empty() && !config.update_password_query.is_empty() && !config.update_hash_scheme.is_empty() {
+        if !user.password.is_empty() && !config.update_password_query.is_empty() && !config.update_hash_scheme.is_empty() {
             let hash_prefix: String = format!("{{{}}}", &config.update_hash_scheme);
-            if pw_hash.starts_with(&hash_prefix) && hashlib::verify_hash(&password, &pw_hash) {
+            if user.password.starts_with(&hash_prefix) && hashlib::verify_hash(&password, &user.password) {
                 match hashlib::hash(&password, &config.hash_scheme) {
                     Some(hash) => {
-                        db::update_password(&user.get("user"), &hash, &authenticator.conn_pool, &config.update_password_query)?;
+                        db::update_password(&user.user, &hash, &authenticator.conn_pool, &config.update_password_query)?;
                     },
                     None => {
                         eprintln!("config: hash_scheme: invalid scheme '{}'", &config.hash_scheme);
@@ -266,12 +305,12 @@ pub fn authenticate(fd: i32, config_file: &str, reply_bin: &str, test: bool) -> 
             }
         }
         let remote_ip = env::var("REMOTE_IP").unwrap_or("".to_string());
-        if !remote_ip.is_empty() && !pw_hash.is_empty() && config.db_auth_hosts.contains(&remote_ip) {
-            if !hashlib::verify_hash(&password, &pw_hash) {
-                return Err(AuthError::PermError);
+        if !remote_ip.is_empty() && !user.password.is_empty() && config.db_auth_hosts.contains(&remote_ip) {
+            if !hashlib::verify_hash(&password, &user.password) {
+                return Err(AuthError::Perm);
             }
         } else {
-            authenticator.credentials_verify(&user.get("user"), &password)?
+            authenticator.credentials_verify(&user.user, &password)?
         }
     }
     authenticator.call_reply_bin(&user)
