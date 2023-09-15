@@ -20,7 +20,6 @@ use std::collections::HashMap;
 use std::{fs::File, io::Read, os::unix::io::FromRawFd, };
 use std::ffi::CString;
 use std::{result,env};
-use config_file::FromConfigFile;
 use serde::Deserialize;
 use nix::unistd::execvp;
 use error::AuthError;
@@ -154,7 +153,7 @@ fn verify_webdav_credentials(username: &str, password: &str, url: &str) -> resul
 }
 
 #[derive(Deserialize)]
-struct Config {
+pub struct Config {
     db_url: String,
     user_query: String,
     update_password_query: String,
@@ -167,6 +166,7 @@ struct Config {
     cache_max_lifetime: i64,
     cache_cleanup: bool,
 }
+
 
 struct Authenticator<'a> {
     config: &'a Config,
@@ -205,7 +205,7 @@ impl Authenticator<'_> {
         }
     }
 
-    fn credentials_verify(&self, username: &str, password: &str) -> result::Result<(), AuthError> {
+    fn credentials_verify(&self, username: &str, password: &str, scheme: &Option<hashlib::Scheme>) -> result::Result<(), AuthError> {
         if self.config.cache_cleanup {
             db::delete_dead_hashes(self.config.cache_max_lifetime, &self.conn_pool, &self.config.cache_table)?;
         }
@@ -228,15 +228,11 @@ impl Authenticator<'_> {
             Ok(verify_ok) => {
                 // got authentication result from nextcloud
                 if verify_ok {
-                    let hash: String = match hashlib::get_matching_hash(password, &expired_hashes) {
-                        Some(h) => h,
-                        None => {
-                            hashlib::hash(password, &self.config.hash_scheme).unwrap_or("".to_string())
-                        }
+                    let hash = match hashlib::get_matching_hash(password, &expired_hashes) {
+                        Some(h) => Some(h),
+                        None => scheme.as_ref().map(|scheme| hashlib::hash(password, scheme))
                     };
-                    if hash.is_empty() {
-                        eprintln!("config: hash_scheme: invalid scheme '{}'", &self.config.hash_scheme);
-                    } else {
+                    if let Some(hash) = hash {
                         db::save_hash(username, &hash, &self.conn_pool, &self.config.cache_table)?;
                     }
                     Ok(())
@@ -275,11 +271,10 @@ fn credentials_from_fd(fd: i32) -> result::Result<(String, String), AuthError> {
     }
 }
 
-pub fn authenticate(fd: i32, config_file: &str, reply_bin: &str, test: bool) -> result::Result<(), AuthError> {
-    let config = Config::from_config_file(config_file)?;
+pub fn authenticate(fd: i32, config: &Config, reply_bin: &str, test: bool) -> result::Result<(), AuthError> {
     let conn_pool = db::get_conn_pool(&config.db_url)?;
     let authenticator = Authenticator {
-        config: &config,
+        config,
         reply_bin: reply_bin.to_string(),
         test,
         conn_pool,
@@ -291,16 +286,21 @@ pub fn authenticate(fd: i32, config_file: &str, reply_bin: &str, test: bool) -> 
             env::set_var("AUTHORIZED", "2");
         }
     } else {
+        let scheme = match config.hash_scheme.to_lowercase().as_str() {
+            "ssha512" => Some(hashlib::Scheme::SSHA512),
+            "sha512" => Some(hashlib::Scheme::SHA512),
+            _ => {
+                eprintln!("config: hash_scheme: invalid scheme '{}'", &config.hash_scheme);
+                None
+            }
+        };
+
         if !user.password.is_empty() && !config.update_password_query.is_empty() && !config.update_hash_scheme.is_empty() {
             let hash_prefix: String = format!("{{{}}}", &config.update_hash_scheme);
             if user.password.starts_with(&hash_prefix) && hashlib::verify_hash(&password, &user.password) {
-                match hashlib::hash(&password, &config.hash_scheme) {
-                    Some(hash) => {
-                        db::update_password(&user.user, &hash, &authenticator.conn_pool, &config.update_password_query)?;
-                    },
-                    None => {
-                        eprintln!("config: hash_scheme: invalid scheme '{}'", &config.hash_scheme);
-                    }
+                if let Some(scheme) = &scheme {
+                    let hash = hashlib::hash(&password, scheme);
+                    db::update_password(&user.user, &hash, &authenticator.conn_pool, &config.update_password_query)?;
                 }
             }
         }
@@ -310,7 +310,7 @@ pub fn authenticate(fd: i32, config_file: &str, reply_bin: &str, test: bool) -> 
                 return Err(AuthError::Perm);
             }
         } else {
-            authenticator.credentials_verify(&user.user, &password)?
+            authenticator.credentials_verify(&user.user, &password, &scheme)?
         }
     }
     authenticator.call_reply_bin(&user)

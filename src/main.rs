@@ -13,7 +13,8 @@
 
 mod dovecot;
 
-use dovecot::{authenticate, error::AuthError};
+use dovecot::{Config, authenticate, error::AuthError};
+use config_file::FromConfigFile;
 
 const ERR_PERMFAIL: i32 = 1;
 const ERR_NOUSER: i32 = 3;
@@ -51,7 +52,12 @@ fn main() {
         }
     }
 
-    std::process::exit(match authenticate(fd, &format!("{}.toml", args[0]), &reply_bin, test) {
+    let config = Config::from_config_file(format!("{}.toml", args[0])).unwrap_or_else(|err| {
+        eprintln!("{}", err);
+        std::process::exit(ERR_TEMPFAIL);
+    });
+
+    std::process::exit(match authenticate(fd, &config, &reply_bin, test) {
         Ok(()) => 0,
         Err(err) => {
             match err {

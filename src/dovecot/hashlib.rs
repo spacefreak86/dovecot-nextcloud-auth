@@ -16,32 +16,43 @@ use sha2::{Sha512, Digest};
 use rand::Rng;
 use rand::distributions::Alphanumeric;
 
+pub enum Scheme {
+    SHA512,
+    SSHA512,
+}
+
+impl Scheme {
+    fn as_str(&self) -> &str {
+        match self {
+            Self::SHA512 => "SHA512",
+            Self::SSHA512 => "SSHA512"
+        }
+    }
+}
+
 fn ssha512(password: &[u8], salt: &[u8]) -> String {
     let mut hasher = Sha512::new();
     hasher.update(password);
     hasher.update(salt);
     let hash = hasher.finalize();
     let salted_hash = [&hash, salt].concat();
-    format!("{{SSHA512}}{}", general_purpose::STANDARD.encode(salted_hash))
+    format!("{{{}}}{}", Scheme::SSHA512.as_str(), general_purpose::STANDARD.encode(salted_hash))
 }
 
 fn sha512(password: &[u8]) -> String {
     let mut hasher = Sha512::new();
     hasher.update(password);
     let hash = hasher.finalize();
-    format!("{{SHA512}}{}", general_purpose::STANDARD.encode(hash))
+    format!("{{{}}}{}", Scheme::SHA512.as_str(), general_purpose::STANDARD.encode(hash))
 }
 
-
-
-pub fn hash(password: &str, scheme: &str) -> Option<String> {
+pub fn hash(password: &str, scheme: &Scheme) -> String {
     match scheme {
-        "SSHA512" => {
+        Scheme::SSHA512 => {
             let salt: Vec<u8> = rand::thread_rng().sample_iter(&Alphanumeric).take(5).collect();
-            Some(ssha512(password.as_bytes(), &salt))
+            ssha512(password.as_bytes(), &salt)
         },
-        "SHA512" => Some(sha512(password.as_bytes())),
-        _ => None
+        Scheme::SHA512 => sha512(password.as_bytes()),
     }
 }
 
