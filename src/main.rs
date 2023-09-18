@@ -11,14 +11,14 @@
 // You should have received a copy of the GNU General Public License
 // along with dovecot-nextcloud-auth.  If not, see <http://www.gnu.org/licenses/>.
 
-mod dovecot;
+pub mod dovecot;
 
-use dovecot::{Config, authenticate, error::AuthError};
+use dovecot::{ReplyBin, Error, RC_TEMPFAIL, authenticate};
 use config_file::FromConfigFile;
 
-const ERR_PERMFAIL: i32 = 1;
-const ERR_NOUSER: i32 = 3;
-const ERR_TEMPFAIL: i32 = 111;
+use dovecot::modules::db::{DBLookupModule, DBLookupConfig, DBCacheVerifyModule, DBCacheVerifyConfig, DBUpdateCredentialsModule, DBUpdateCredentialsConfig};
+use dovecot::modules::http::{HttpVerifyModule, HttpVerifyConfig};
+
 const TEST_REPLY_BIN: &str = "/bin/true";
 
 fn help(myname: &str) {
@@ -26,7 +26,7 @@ fn help(myname: &str) {
 }
 
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
+    let mut args: Vec<String> = std::env::args().collect();
     let myname = String::from("dovecot-nextcloud-auth");
 
     if args.len() < 2 {
@@ -38,46 +38,62 @@ fn main() {
         std::process::exit(0);
     }
 
-    let mut fd = 3;
-    let mut reply_bin = String::from(&args[1]);
+    let config_file = format!("{}.toml", args.remove(0));
+    let mut reply_bin = args.remove(0);
+    let mut fd = None;
     let mut test = false;
+
     if reply_bin == "test" {
-        // in test mode, read credentials from fd 0 (stdin)
         test = true;
-        fd = 0;
-        if args.len() > 2 {
-            reply_bin = String::from(&args[2]);
+        // in test mode, read credentials from fd 0 (stdin)
+        fd = Some(0);
+        if !args.is_empty() {
+            reply_bin = args.remove(0);
         } else {
             reply_bin = String::from(TEST_REPLY_BIN);
         }
     }
 
-    let config = Config::from_config_file(format!("{}.toml", args[0])).unwrap_or_else(|err| {
+    let reply_bin = ReplyBin::new(reply_bin, args).unwrap_or_else(|err| {
         eprintln!("{}", err);
-        std::process::exit(ERR_TEMPFAIL);
+        std::process::exit(RC_TEMPFAIL);
     });
 
-    std::process::exit(match authenticate(fd, &config, &reply_bin, test) {
-        Ok(()) => 0,
+    let db_config = DBLookupConfig::from_config_file(&config_file).unwrap_or_else(|err| {
+        eprintln!("{}", err);
+        std::process::exit(RC_TEMPFAIL);
+    });
+
+    let conn_pool = dovecot::modules::db::get_conn_pool("DBURL").unwrap();
+    let lookup_mod = DBLookupModule::new(db_config, &conn_pool);
+    
+    let http_config = HttpVerifyConfig::from_config_file(&config_file).unwrap_or_else(|err| {
+        eprintln!("{}", err);
+        std::process::exit(RC_TEMPFAIL);
+    });
+    let http_mod = HttpVerifyModule::new(http_config);
+
+    let verify_config = DBCacheVerifyConfig::from_config_file(config_file).unwrap_or_else(|err| {
+        eprintln!("{}", err);
+        std::process::exit(RC_TEMPFAIL);
+    });
+    let verify_mod = DBCacheVerifyModule::new(verify_config, &conn_pool, http_mod);
+
+    let update_mod: Option<&DBUpdateCredentialsModule> = None;
+    std::process::exit(match authenticate(Some(&lookup_mod), Some(&verify_mod), update_mod, &reply_bin, fd) {
+        Ok(_) => 0,
         Err(err) => {
-            match err {
-                AuthError::Perm => {
+            match &err {
+                Error::PermFail|Error::NoUser => {
                     if test {
                         eprintln!("{}", err);
                     }
-                    ERR_PERMFAIL
                 },
-                AuthError::NoUser => {
-                    if test {
-                        eprintln!("{}", err);
-                    }
-                    ERR_NOUSER
-                },
-                AuthError::Temp(errmsg) => {
-                    eprintln!("{}", errmsg);
-                    ERR_TEMPFAIL
+                Error::TempFail(msg) => {
+                    eprintln!("{}", msg);
                 },
             }
+            err.exit_code()
         }
     });
 }

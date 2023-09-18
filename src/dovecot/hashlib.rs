@@ -15,14 +15,16 @@ use base64::{Engine as _, engine::general_purpose};
 use sha2::{Sha512, Digest};
 use rand::Rng;
 use rand::distributions::Alphanumeric;
+use serde::Deserialize;
 
+#[derive(Debug, Clone, Deserialize)]
 pub enum Scheme {
     SHA512,
     SSHA512,
 }
 
 impl Scheme {
-    fn as_str(&self) -> &str {
+    pub fn as_str(&self) -> &str {
         match self {
             Self::SHA512 => "SHA512",
             Self::SSHA512 => "SSHA512"

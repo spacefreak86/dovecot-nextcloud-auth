@@ -15,6 +15,7 @@ mysql = "*"
 config-file = "*"
 serde = { version="*", features=["derive"]}
 nix = { version="*", features=["process"]}
+urlencoding = "*"
 ureq = "*"
 base64 = "*"
 sha2 = "*"
