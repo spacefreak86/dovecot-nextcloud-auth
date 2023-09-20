@@ -14,11 +14,11 @@
 
 use super::{CredentialsVerify, DovecotUser, AuthResult, Error};
 
-use serde::Deserialize;
+use serde::{Serialize, Deserialize};
 use base64::{Engine as _, engine::general_purpose};
 use urlencoding::encode;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpVerifyConfig {
     pub url: String,
     pub method: String,
@@ -38,7 +38,7 @@ impl HttpVerifyModule {
 }
 
 impl CredentialsVerify for HttpVerifyModule {
-    fn credentials_verify(&self, user: &DovecotUser, password: &str) -> AuthResult<bool> {
+    fn credentials_verify(&self, user: &DovecotUser, password: &str) -> AuthResult<()> {
         let username = encode(&user.user);
         let url = self.config.url.replace("::USERNAME::", &username);
 
@@ -52,14 +52,14 @@ impl CredentialsVerify for HttpVerifyModule {
             Ok(res) => {
                 let code = res.status();
                 if code == self.config.ok_code {
-                    Ok(true)
+                    Ok(())
                 } else {
                     Err(Error::TempFail(format!("unexpected http response: {} {}", code, res.status_text())))
                 }
             },
             Err(ureq::Error::Status(code, res)) => {
                 if code == self.config.invalid_code {
-                    Ok(false)
+                    Err(Error::PermFail)
                 } else {
                     Err(Error::TempFail(format!("unexpected http error response: {} {}", code, res.status_text())))
                 }

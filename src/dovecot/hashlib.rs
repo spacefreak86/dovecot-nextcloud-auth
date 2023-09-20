@@ -15,9 +15,9 @@ use base64::{Engine as _, engine::general_purpose};
 use sha2::{Sha512, Digest};
 use rand::Rng;
 use rand::distributions::Alphanumeric;
-use serde::Deserialize;
+use serde::{Serialize, Deserialize};
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Scheme {
     SHA512,
     SSHA512,

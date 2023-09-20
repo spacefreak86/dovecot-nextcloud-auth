@@ -81,9 +81,7 @@ pub struct DovecotUser {
 
 impl DovecotUser {
     pub fn new(username: String) -> Self {
-        let mut user = DovecotUser::default();
-        user.user = username;
-        user
+        Self { user: username, ..Default::default() }
     }
 
     pub fn get_env_vars(&self) -> HashMap<&'static str, String> {
@@ -166,12 +164,7 @@ impl ReplyBin {
     }
 }
 
-pub fn authenticate<L, V, U>(lookup_mod: Option<&L>, verify_mod: Option<&V>, update_mod: Option<&U>, reply_bin: &ReplyBin, fd: Option<i32>) -> AuthResult<Infallible>
-where
-    L: CredentialsLookup,
-    V: CredentialsVerify,
-    U: CredentialsUpdate
-{
+pub fn authenticate(lookup_mod: &Option<Box<dyn CredentialsLookup>>, verify_mod: &Option<Box<dyn CredentialsVerify>>, update_mod: &Option<Box<dyn CredentialsUpdate>>, reply_bin: &ReplyBin, fd: Option<i32>) -> AuthResult<Infallible> {
     let (username, password) = read_credentials_from_fd(fd)?;
     let mut user = DovecotUser::new(username);
 
@@ -180,10 +173,8 @@ where
     match lookup_mod {
         Some(module) => {
             module.credentials_lookup(&mut user)?;
-            if credentials_lookup {
-                if env::var("AUTHORIZED").unwrap_or_default() == "1" {
-                    env::set_var("AUTHORIZED", "2");
-                }
+            if credentials_lookup && env::var("AUTHORIZED").unwrap_or_default() == "1" {
+                env::set_var("AUTHORIZED", "2");
             }
         },
         None => {

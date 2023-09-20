@@ -15,7 +15,7 @@ use super::{CredentialsLookup, CredentialsVerify, CredentialsUpdate, DovecotUser
 
 use mysql::*;
 use mysql::prelude::*;
-use serde::Deserialize;
+use serde::{Serialize, Deserialize};
 
 impl From<mysql::Error> for Error {
     fn from(error: mysql::Error) -> Self {
@@ -118,30 +118,30 @@ pub fn delete_dead_hashes(max_lifetime: i64, pool: &Pool, cache_table: &str) -> 
 
 
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DBLookupConfig {
     pub user_query: String,
 }
 
 #[derive(Debug, Clone)]
-pub struct DBLookupModule<'a> {
+pub struct DBLookupModule {
     config: DBLookupConfig,
-    conn_pool: &'a Pool,
+    conn_pool: Pool,
 }
 
-impl<'a> DBLookupModule<'a> {
-    pub fn new(config: DBLookupConfig, conn_pool: &'a Pool) -> Self {
+impl DBLookupModule {
+    pub fn new(config: DBLookupConfig, conn_pool: Pool) -> Self {
         Self { config, conn_pool }
     }
 }
 
-impl CredentialsLookup for DBLookupModule<'_> {
+impl CredentialsLookup for DBLookupModule {
     fn credentials_lookup(&self, user: &mut DovecotUser) -> AuthResult<()> {
-        get_user(user, self.conn_pool, &self.config.user_query)
+        get_user(user, &self.conn_pool, &self.config.user_query)
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DBCacheVerifyConfig {
     pub db_table: String,
     pub verify_interval: i64,
@@ -151,29 +151,28 @@ pub struct DBCacheVerifyConfig {
     pub allow_expired_on_error: bool,
 }
 
-#[derive(Debug, Clone)]
-pub struct DBCacheVerifyModule<'a, M: CredentialsVerify> {
+pub struct DBCacheVerifyModule {
     config: DBCacheVerifyConfig,
-    conn_pool: &'a Pool,
-    module: M,
+    conn_pool: Pool,
+    module: Box<dyn CredentialsVerify>,
     hash_scheme: hashlib::Scheme,
 }
 
-impl<'a, M: CredentialsVerify> DBCacheVerifyModule<'a, M> {
-    pub fn new(config: DBCacheVerifyConfig, conn_pool: &'a Pool, module: M) -> Self {
+impl DBCacheVerifyModule {
+    pub fn new(config: DBCacheVerifyConfig, conn_pool: Pool, module: Box<dyn CredentialsVerify>) -> Self {
         let hash_scheme = config.hash_scheme.as_ref().cloned().unwrap_or(hashlib::Scheme::SSHA512);
         Self { config, conn_pool, module, hash_scheme }
     }
 }
 
-impl<M: CredentialsVerify> CredentialsVerify for DBCacheVerifyModule<'_, M> {
-    fn credentials_verify(&self, user: &DovecotUser, password: &str) -> AuthResult<bool> {
+impl CredentialsVerify for DBCacheVerifyModule {
+    fn credentials_verify(&self, user: &DovecotUser, password: &str) -> AuthResult<()> {
         if self.config.cleanup {
-            delete_dead_hashes(self.config.max_lifetime, self.conn_pool, &self.config.db_table)?;
+            delete_dead_hashes(self.config.max_lifetime, &self.conn_pool, &self.config.db_table)?;
         }
         let mut verified_hashes: Vec<String> = Vec::new();
         let mut expired_hashes: Vec<String> = Vec::new();
-        for (hash, last_verify) in get_hashes(&user.user, self.conn_pool, &self.config.db_table, self.config.max_lifetime)? {
+        for (hash, last_verify) in get_hashes(&user.user, &self.conn_pool, &self.config.db_table, self.config.max_lifetime)? {
             if last_verify <= self.config.verify_interval {
                 verified_hashes.push(hash);
             } else if last_verify <= self.config.max_lifetime {
@@ -182,35 +181,31 @@ impl<M: CredentialsVerify> CredentialsVerify for DBCacheVerifyModule<'_, M> {
         }
 
         if hashlib::get_matching_hash(password, &verified_hashes).is_some() {
-            return Ok(true)
+            return Ok(())
         }
 
+        let expired_hash = hashlib::get_matching_hash(password, &expired_hashes);
+
         match self.module.credentials_verify(user, password) {
-            Ok(verify_ok) => {
-                if verify_ok {
-                    let hash = hashlib::get_matching_hash(password, &expired_hashes)
-                        .unwrap_or(hashlib::hash(password, &self.hash_scheme));
-                    save_hash(&user.user, &hash, self.conn_pool, &self.config.db_table)?;
-                    Ok(true)
-                } else {
-                    let invalid_hash = hashlib::get_matching_hash(password, &expired_hashes);
-                    if let Some(hash) = invalid_hash {
-                        delete_hash(&user.user, &hash, self.conn_pool, &self.config.db_table)?;
-                    }
-                    Err(Error::PermFail)
-                }
+            Ok(_) => {
+                let hash = expired_hash.unwrap_or(hashlib::hash(password, &self.hash_scheme));
+                save_hash(&user.user, &hash, &self.conn_pool, &self.config.db_table)?;
+                Ok(())
             },
             Err(err) => {
-                eprintln!("{}", err);
-                if !self.config.allow_expired_on_error {
-                    return Err(Error::PermFail);
-                }
-                match hashlib::get_matching_hash(password, &expired_hashes) {
-                    Some(_) => {
-                        Ok(true)
+                match err {
+                    Error::PermFail => {
+                        if let Some(hash) = expired_hash {
+                            delete_hash(&user.user, &hash, &self.conn_pool, &self.config.db_table)?;
+                        }
+                        Err(err)
                     },
-                    None => {
-                        Err(Error::PermFail)
+                    _ => {
+                        eprintln!("{}", err);
+                        match self.config.allow_expired_on_error {
+                            true => Ok(expired_hash.map(|_| ()).ok_or(err)?),
+                            false => Err(err)
+                        }
                     }
                 }
             }
@@ -218,31 +213,32 @@ impl<M: CredentialsVerify> CredentialsVerify for DBCacheVerifyModule<'_, M> {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DBUpdateCredentialsConfig {
     pub update_password_query: String,
     pub hash_scheme: hashlib::Scheme,
-    pub target_hash_scheme: hashlib::Scheme,
 }
 
 #[derive(Debug, Clone)]
-pub struct DBUpdateCredentialsModule<'a> {
+pub struct DBUpdateCredentialsModule {
     config: DBUpdateCredentialsConfig,
-    conn_pool: &'a Pool
+    conn_pool: Pool
 }
 
-impl<'a> DBUpdateCredentialsModule<'a> {
-    pub fn new(config: DBUpdateCredentialsConfig, conn_pool: &'a Pool) -> Self {
+impl DBUpdateCredentialsModule {
+    pub fn new(config: DBUpdateCredentialsConfig, conn_pool: Pool) -> Self {
         Self { config, conn_pool }
     }
 }
 
-impl CredentialsUpdate for DBUpdateCredentialsModule<'_> {
+impl CredentialsUpdate for DBUpdateCredentialsModule {
     fn update_credentials(&self, user: &DovecotUser, password: &str) -> AuthResult<()> {
         if !user.password.is_empty() && !self.config.update_password_query.is_empty() {
             let hash_prefix: String = format!("{{{}}}", &self.config.hash_scheme.as_str());
-            if user.password.starts_with(&hash_prefix) && hashlib::verify_hash(&password, &user.password) {
-                let hash = hashlib::hash(&password, &self.config.target_hash_scheme);
+            //if !user.password.starts_with(&hash_prefix) && hashlib::verify_hash(password, &user.password) {
+            let verifier = super::InternalVerifyModule {};
+            if !user.password.starts_with(&hash_prefix) && verifier.credentials_verify(user, password).is_ok() {
+                let hash = hashlib::hash(password, &self.config.hash_scheme);
                 update_password(&user.user, &hash, &self.conn_pool, &self.config.update_password_query)?;
             }
         }

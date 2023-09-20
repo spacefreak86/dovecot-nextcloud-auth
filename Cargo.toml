@@ -12,8 +12,8 @@ codegen-units = 1
 
 [dependencies]
 mysql = "*"
-config-file = "*"
 serde = { version="*", features=["derive"]}
+toml = "*"
 nix = { version="*", features=["process"]}
 urlencoding = "*"
 ureq = "*"

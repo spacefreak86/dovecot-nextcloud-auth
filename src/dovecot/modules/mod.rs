@@ -21,7 +21,7 @@ pub trait CredentialsLookup {
 }
 
 pub trait CredentialsVerify {
-    fn credentials_verify(&self, user: &DovecotUser, password: &str) -> AuthResult<bool>;
+    fn credentials_verify(&self, user: &DovecotUser, password: &str) -> AuthResult<()>;
 }
 
 pub trait CredentialsUpdate {
@@ -32,9 +32,9 @@ pub trait CredentialsUpdate {
 pub struct InternalVerifyModule {}
 
 impl CredentialsVerify for InternalVerifyModule {
-    fn credentials_verify(&self, user: &DovecotUser, password: &str) -> AuthResult<bool> {
+    fn credentials_verify(&self, user: &DovecotUser, password: &str) -> AuthResult<()> {
         match hashlib::verify_hash(password, &user.password) {
-            true => Ok(true),
+            true => Ok(()),
             false => Err(Error::PermFail)
         }
     }
