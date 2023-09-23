@@ -1,29 +1,29 @@
-// dovecot-nextcloud-auth is free software: you can redistribute it and/or modify
+// dovecot-auth is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// dovecot-nextcloud-auth is distributed in the hope that it will be useful,
+// dovecot-auth is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 // GNU General Public License for more details.
 //
 // You should have received a copy of the GNU General Public License
-// along with dovecot-nextcloud-auth.  If not, see <http://www.gnu.org/licenses/>.
+// along with dovecot-auth.  If not, see <http://www.gnu.org/licenses/>.
 
-pub mod modules;
 pub mod hashlib;
+pub mod modules;
 
+use nix::unistd::execvp;
 use std::collections::HashMap;
+use std::convert::Infallible;
+use std::env;
+use std::ffi::{CString, NulError};
 use std::fs::File;
 use std::io::Read;
 use std::os::unix::io::FromRawFd;
-use std::env;
-use std::ffi::{CString, NulError};
-use nix::unistd::execvp;
-use std::convert::Infallible;
 
-use modules::{CredentialsLookup, CredentialsVerify, CredentialsUpdate};
+use modules::{CredentialsLookup, CredentialsUpdate, CredentialsVerify};
 
 pub const RC_PERMFAIL: i32 = 1;
 pub const RC_NOUSER: i32 = 3;
@@ -55,7 +55,7 @@ impl Error {
         match self {
             Self::PermFail => RC_PERMFAIL,
             Self::NoUser => RC_NOUSER,
-            Self::TempFail(_) => RC_TEMPFAIL
+            Self::TempFail(_) => RC_TEMPFAIL,
         }
     }
 }
@@ -63,6 +63,13 @@ impl Error {
 impl From<std::io::Error> for Error {
     fn from(error: std::io::Error) -> Self {
         Error::TempFail(error.to_string())
+    }
+}
+
+#[cfg(feature = "serde")]
+impl From<toml::de::Error> for Error {
+    fn from(value: toml::de::Error) -> Self {
+        Error::TempFail(value.to_string())
     }
 }
 
@@ -81,7 +88,10 @@ pub struct DovecotUser {
 
 impl DovecotUser {
     pub fn new(username: String) -> Self {
-        Self { user: username, ..Default::default() }
+        Self {
+            user: username,
+            ..Default::default()
+        }
     }
 
     pub fn get_env_vars(&self) -> HashMap<&'static str, String> {
@@ -93,7 +103,7 @@ impl DovecotUser {
         if let Some(home) = self.home.as_ref() {
             map.insert("HOME", home.clone());
         }
-    
+
         if let Some(mail) = self.mail.as_ref() {
             map.insert("userdb_mail", mail.clone());
             extra.push("userdb_mail");
@@ -131,28 +141,31 @@ fn read_credentials_from_fd(fd: Option<i32>) -> AuthResult<(String, String)> {
     if credentials.len() == 2 {
         Ok((credentials[0].to_string(), credentials[1].to_string()))
     } else {
-        Err(Error::TempFail(format!("did not receive credentials on fd {}", fd)))
-    }}
+        Err(Error::TempFail(format!(
+            "did not receive credentials on fd {fd}"
+        )))
+    }
+}
 
 pub struct ReplyBin {
     pub reply_bin: CString,
-    pub args: Vec<CString>
+    pub args: Vec<CString>,
 }
 
 impl ReplyBin {
     pub fn new<B, T>(reply_bin: B, args: Vec<T>) -> Result<Self, NulError>
     where
         B: Into<Vec<u8>>,
-        T: Into<Vec<u8>>
+        T: Into<Vec<u8>>,
     {
         let c_reply_bin = CString::new(reply_bin)?;
         let mut c_args: Vec<CString> = Vec::new();
         for arg in args.into_iter() {
             c_args.push(CString::new(arg)?);
-        } 
+        }
         Ok(Self {
             reply_bin: c_reply_bin,
-            args: c_args
+            args: c_args,
         })
     }
 
@@ -164,7 +177,13 @@ impl ReplyBin {
     }
 }
 
-pub fn authenticate(lookup_mod: &Option<Box<dyn CredentialsLookup>>, verify_mod: &Option<Box<dyn CredentialsVerify>>, update_mod: &Option<Box<dyn CredentialsUpdate>>, reply_bin: &ReplyBin, fd: Option<i32>) -> AuthResult<Infallible> {
+pub fn authenticate(
+    lookup_mod: &Option<Box<dyn CredentialsLookup>>,
+    verify_mod: &Option<Box<dyn CredentialsVerify>>,
+    update_mod: &Option<Box<dyn CredentialsUpdate>>,
+    reply_bin: &ReplyBin,
+    fd: Option<i32>,
+) -> AuthResult<Infallible> {
     let (username, password) = read_credentials_from_fd(fd)?;
     let mut user = DovecotUser::new(username);
 
@@ -176,7 +195,7 @@ pub fn authenticate(lookup_mod: &Option<Box<dyn CredentialsLookup>>, verify_mod:
             if credentials_lookup && env::var("AUTHORIZED").unwrap_or_default() == "1" {
                 env::set_var("AUTHORIZED", "2");
             }
-        },
+        }
         None => {
             if credentials_lookup {
                 return Err(Error::NoUser);
@@ -192,17 +211,19 @@ pub fn authenticate(lookup_mod: &Option<Box<dyn CredentialsLookup>>, verify_mod:
         match verify_mod {
             Some(module) => {
                 module.credentials_verify(&user, &password)?;
-            },
+            }
             None => {
-                return Err(Error::TempFail("unable to verify credentials, very module not loaded".to_string()));
+                return Err(Error::TempFail(
+                    "unable to verify credentials, very module not loaded".to_string(),
+                ));
             }
         }
     }
 
-    reply_bin.call(&user).map_err(|err| Error::TempFail(err.to_string()))
+    reply_bin
+        .call(&user)
+        .map_err(|err| Error::TempFail(format!("unable to call reply_bin: {err}")))
 }
-
-
 
 /*
 

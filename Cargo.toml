@@ -1,5 +1,5 @@
 [package]
-name = "dovecot-nextcloud-auth"
+name = "dovecot-auth"
 version = "0.1.0"
 authors = ["Thomas Oettli <spacefreak@noop.ch>"]
 edition = "2021"
@@ -12,11 +12,27 @@ codegen-units = 1
 
 [dependencies]
 mysql = "*"
-serde = { version="*", features=["derive"]}
+serde = { version="1.0.188", features=["derive"] }
 toml = "*"
-nix = { version="*", features=["process"]}
+nix = { version="*", features=["process"] }
 urlencoding = "*"
 ureq = "*"
 base64 = "*"
 sha2 = "*"
 rand = "*"
+clap = { version="4.4.4", features=["derive", "cargo"] }
+
+[features]
+serde = []
+db = []
+http = []
+all = ["serde", "db", "http"]
+
+[lib]
+name = "dovecot_auth"
+path = "src/lib.rs"
+
+[[bin]]
+name = "dovecot-auth-daemon"
+path = "src/bin.rs"
+required-features = ["serde"]
