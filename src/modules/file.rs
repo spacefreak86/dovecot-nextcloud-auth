@@ -18,9 +18,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::SystemTime;
 
+const DEFAULT_VERIFY_CACHE_FILE: &str = "/tmp/dovecot-auth-verify.cache";
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct FileCacheVerifyConfig {
-    pub cache_file: String,
+    pub cache_file: Option<String>,
     pub verify_interval: u64,
     pub max_lifetime: u64,
     pub hash_scheme: Option<hashlib::Scheme>,
@@ -30,7 +32,7 @@ pub struct FileCacheVerifyConfig {
 impl Default for FileCacheVerifyConfig {
     fn default() -> Self {
         Self {
-            cache_file: String::from("/tmp/dovecot-auth.cache"),
+            cache_file: Some(String::from(DEFAULT_VERIFY_CACHE_FILE)),
             verify_interval: 60,
             max_lifetime: 86400,
             hash_scheme: Some(hashlib::Scheme::SSHA512),
@@ -41,6 +43,7 @@ impl Default for FileCacheVerifyConfig {
 
 pub struct FileCacheVerifyModule {
     config: FileCacheVerifyConfig,
+    cache_file: String,
     module: Box<dyn CredentialsVerify>,
     hash_scheme: hashlib::Scheme,
 }
@@ -52,40 +55,15 @@ impl FileCacheVerifyModule {
             .as_ref()
             .cloned()
             .unwrap_or(hashlib::Scheme::SSHA512);
+        let cache_file = config.cache_file.as_ref().cloned().unwrap_or(DEFAULT_VERIFY_CACHE_FILE.to_string());
         Self {
             config,
+            cache_file,
             module,
             hash_scheme,
         }
     }
 }
-
-/*
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-struct CacheEntry {
-    hash: String,
-    last_verified: SystemTime,
-}
-
-impl CacheEntry {
-    fn new(hash: String) -> Self {
-        Self {
-            hash,
-            last_verified: SystemTime::now(),
-        }
-    }
-
-    fn update_last_verified(&mut self) {
-        self.last_verified = SystemTime::now();
-    }
-}
-
-impl AsRef<str> for CacheEntry {
-    fn as_ref(&self) -> &str {
-        &self.hash
-    }
-}
-*/
 
 #[derive(Default, Debug, Clone, Deserialize, Serialize)]
 struct VerifyCacheFile {
@@ -95,6 +73,24 @@ struct VerifyCacheFile {
 }
 
 impl VerifyCacheFile {
+    fn from_path_or_default(path: &str) -> Self {
+        match std::fs::read(path) {
+            Ok(data) => bincode::deserialize(&data).unwrap_or_default(),
+            Err(_) => VerifyCacheFile::default(),
+        }
+    }
+
+    fn write(&mut self, path: &str) -> AuthResult<()> {
+        self.cleanup();
+        match bincode::serialize(self) {
+            Ok(contents) => {
+                std::fs::write(path, contents)?;
+                Ok(())
+            },
+            Err(err) => Err(Error::TempFail(err.to_string()))
+        }
+    }
+
     fn insert(&mut self, username: &str, hash: String) {
         match self.cache.get_mut(username) {
             Some(hashes) => {
@@ -161,11 +157,7 @@ impl VerifyCacheFile {
 
 impl CredentialsVerify for FileCacheVerifyModule {
     fn credentials_verify(&self, user: &DovecotUser, password: &str) -> AuthResult<()> {
-        let mut cache: VerifyCacheFile = match std::fs::read(&self.config.cache_file) {
-            Ok(data) => bincode::deserialize(&data).unwrap_or_default(),
-            Err(_) => VerifyCacheFile::default(),
-        };
-
+        let mut cache = VerifyCacheFile::from_path_or_default(&self.cache_file);
         cache.delete_hashes(self.config.max_lifetime);
 
         let (mut verified_hashes, mut expired_hashes) = cache.get_hashes(
@@ -204,17 +196,9 @@ impl CredentialsVerify for FileCacheVerifyModule {
         };
 
         if cache.changed {
-            cache.cleanup();
-            match bincode::serialize(&cache) {
-                Ok(contents) => {
-                    if let Err(err) = std::fs::write(&self.config.cache_file, contents) {
-                        eprintln!("unable to write cache file: {err}");
-                    }
-                },
-                Err(err) => {
-                    eprintln!("unable to serialize cache: {err}");
-                }
-            };
+            if let Err(err) = cache.write(&self.cache_file) {
+                eprintln!("unable to write to cache_file: {err}");
+            }
         }
 
         res
