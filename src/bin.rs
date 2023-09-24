@@ -49,7 +49,7 @@ pub enum VerifyModule {
 pub enum VerifyCacheModule {
     #[cfg(feature = "db")]
     DB(DBCacheVerifyConfig),
-    File(FileCacheVerifyConfig)
+    File(FileCacheVerifyConfig),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,10 +84,12 @@ impl Default for Config {
         #[cfg(feature = "db")]
         let verify_cache_module = Some(VerifyCacheModule::DB(DBCacheVerifyConfig::default()));
         #[cfg(not(feature = "db"))]
-        let verify_cache_module: Option<VerifyCacheModule> = Some(VerifyCacheModule::File(FileCacheVerifyConfig::default()));
+        let verify_cache_module: Option<VerifyCacheModule> =
+            Some(VerifyCacheModule::File(FileCacheVerifyConfig::default()));
 
         #[cfg(feature = "db")]
-        let update_credentials_module = Some(UpdateCredentialsModule::DB(DBUpdateCredentialsConfig::default(),
+        let update_credentials_module = Some(UpdateCredentialsModule::DB(
+            DBUpdateCredentialsConfig::default(),
         ));
         #[cfg(not(feature = "db"))]
         let update_credentials_module: Option<UpdateCredentialsModule> = None;
@@ -112,6 +114,9 @@ fn print_example_config() {
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
+/// CheckPassword binary for Dovecot
+///
+/// https://doc.dovecot.org/configuration_manual/authentication/checkpassword/
 struct Args {
     #[arg(
         short,
@@ -142,9 +147,9 @@ fn main() {
         std::process::exit(0);
     }
 
-    let path = format!("{myname}.toml");
+    let path = env::var("DOVECOT_AUTH_CONFIG").unwrap_or(format!("/etc/{myname}.toml"));
     let config = parse_config_file(&path).unwrap_or_else(|err| {
-        eprintln!("unable to read config file: {err}");
+        eprintln!("unable to read config file {path}: {err}");
         std::process::exit(err.exit_code());
     });
 
@@ -202,7 +207,7 @@ fn main() {
                         conn_pool.clone(),
                         vrfy_mod,
                     )));
-                },
+                }
                 VerifyCacheModule::File(config) => {
                     verify_mod = Some(Box::new(FileCacheVerifyModule::new(config, vrfy_mod)));
                 }
