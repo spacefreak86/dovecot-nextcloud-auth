@@ -16,7 +16,7 @@ use rand::distributions::Alphanumeric;
 use rand::Rng;
 use sha2::{Digest, Sha512};
 
-#[cfg(feature="serde")]
+#[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone)]
@@ -88,16 +88,11 @@ pub fn verify_hash(password: &str, hash: &str) -> bool {
 }
 
 pub fn get_matching_hash<H: AsRef<str>>(password: &str, hash_list: &mut Vec<H>) -> Option<H> {
-    if let Some(index) = hash_list.iter().position(|hash| verify_hash(password, hash.as_ref())) {
+    if let Some(index) = hash_list
+        .iter()
+        .position(|hash| verify_hash(password, hash.as_ref()))
+    {
         return Some(hash_list.remove(index));
     }
     None
-/*
-    for idx in hash_list {
-        if verify_hash(password, hash.as_ref()) {
-            return Some(*hash);
-        }
-    }
-*/
-//    None
 }

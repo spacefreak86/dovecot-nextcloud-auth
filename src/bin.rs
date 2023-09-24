@@ -217,11 +217,8 @@ fn main() {
                 #[cfg(feature = "db")]
                 VerifyCacheModule::DB(config) => match conn_pool.as_ref().cloned() {
                     Some(pool) => {
-                        verify_mod = Some(Box::new(DBCacheVerifyModule::new(
-                            config,
-                            pool,
-                            vrfy_mod,
-                        )));
+                        verify_mod =
+                            Some(Box::new(DBCacheVerifyModule::new(config, pool, vrfy_mod)));
                     }
                     None => {
                         eprintln!("config option db_url not set (needed by verify_cache_module)");
@@ -242,12 +239,12 @@ fn main() {
             UpdateCredentialsModule::DB(config) => match conn_pool.as_ref().cloned() {
                 Some(pool) => {
                     update_mod = Some(Box::new(DBUpdateCredentialsModule::new(config, pool)));
-                },
+                }
                 None => {
                     eprintln!("config option db_url not set (needed by update_credentials_module)");
                     std::process::exit(RC_TEMPFAIL);
                 }
-            }
+            },
         };
     };
 

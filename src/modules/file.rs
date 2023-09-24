@@ -55,7 +55,11 @@ impl FileCacheVerifyModule {
             .as_ref()
             .cloned()
             .unwrap_or(hashlib::Scheme::SSHA512);
-        let cache_file = config.cache_file.as_ref().cloned().unwrap_or(DEFAULT_VERIFY_CACHE_FILE.to_string());
+        let cache_file = config
+            .cache_file
+            .as_ref()
+            .cloned()
+            .unwrap_or(DEFAULT_VERIFY_CACHE_FILE.to_string());
         Self {
             config,
             cache_file,
@@ -69,7 +73,7 @@ impl FileCacheVerifyModule {
 struct VerifyCacheFile {
     cache: HashMap<String, HashMap<String, SystemTime>>,
     #[serde(skip_serializing, default)]
-    changed: bool
+    changed: bool,
 }
 
 impl VerifyCacheFile {
@@ -86,8 +90,8 @@ impl VerifyCacheFile {
             Ok(contents) => {
                 std::fs::write(path, contents)?;
                 Ok(())
-            },
-            Err(err) => Err(Error::TempFail(err.to_string()))
+            }
+            Err(err) => Err(Error::TempFail(err.to_string())),
         }
     }
 
@@ -95,7 +99,7 @@ impl VerifyCacheFile {
         match self.cache.get_mut(username) {
             Some(hashes) => {
                 hashes.insert(hash, SystemTime::now());
-            },
+            }
             None => {
                 let mut hashes = HashMap::new();
                 hashes.insert(hash, SystemTime::now());
@@ -105,7 +109,12 @@ impl VerifyCacheFile {
         self.changed = true;
     }
 
-    fn get_hashes(&self, username: &str, verify_interval: u64, max_lifetime: u64) -> (Vec<String>, Vec<String>) {
+    fn get_hashes(
+        &self,
+        username: &str,
+        verify_interval: u64,
+        max_lifetime: u64,
+    ) -> (Vec<String>, Vec<String>) {
         let mut verified_hashes = Vec::new();
         let mut expired_hashes = Vec::new();
         let now = SystemTime::now();
@@ -126,20 +135,22 @@ impl VerifyCacheFile {
     fn delete_hashes(&mut self, max_lifetime: u64) {
         let now = SystemTime::now();
         for (_, hashes) in self.cache.iter_mut() {
-            hashes.retain(|_, last_verified| match now.duration_since(*last_verified) {
-                Ok(duration) => {
-                    let valid = duration.as_secs() <= max_lifetime;
-                    if valid == false {
-                        self.changed = true;
+            hashes.retain(
+                |_, last_verified| match now.duration_since(*last_verified) {
+                    Ok(duration) => {
+                        let valid = duration.as_secs() <= max_lifetime;
+                        if valid == false {
+                            self.changed = true;
+                        }
+                        valid
                     }
-                    valid
+                    Err(_) => {
+                        self.changed = true;
+                        false
+                    }
                 },
-                Err(_) => {
-                    self.changed = true;
-                    false
-                }
-            });
-        };
+            );
+        }
     }
 
     fn delete_hash(&mut self, username: &str, hash: &str) {
@@ -174,7 +185,8 @@ impl CredentialsVerify for FileCacheVerifyModule {
 
         let res = match self.module.credentials_verify(user, password) {
             Ok(_) => {
-                let hash = expired_hash.unwrap_or_else(|| hashlib::hash(password, &self.hash_scheme));
+                let hash =
+                    expired_hash.unwrap_or_else(|| hashlib::hash(password, &self.hash_scheme));
                 cache.insert(&user.user, hash);
                 Ok(())
             }
