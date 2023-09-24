@@ -62,7 +62,8 @@ pub enum UpdateCredentialsModule {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     configured: bool,
-    db_url: String,
+    #[cfg(feature = "db")]
+    db_url: Option<String>,
     lookup_module: Option<LookupModule>,
     verify_module: Option<VerifyModule>,
     verify_cache_module: Option<VerifyCacheModule>,
@@ -97,7 +98,7 @@ impl Default for Config {
         Self {
             configured: false,
             #[cfg(feature = "db")]
-            db_url: String::from("mysql://DBUSER:DBPASS@localhost:3306/postfix"),
+            db_url: Some(String::from("mysql://DBUSER:DBPASS@localhost:3306/postfix")),
             lookup_module,
             verify_module,
             verify_cache_module,
@@ -172,14 +173,27 @@ fn main() {
         });
 
     #[cfg(feature = "db")]
-    let conn_pool = get_conn_pool(&config.db_url).unwrap();
+    let conn_pool = config.db_url.as_ref().map(|url| {
+        get_conn_pool(url).unwrap_or_else(|err| {
+            eprintln!("unable to parse db_url: {err}");
+            std::process::exit(RC_TEMPFAIL);
+        })
+    });
 
     let mut lookup_mod: Option<Box<dyn CredentialsLookup>> = None;
     if let Some(module) = config.lookup_module {
         match module {
             #[cfg(feature = "db")]
             LookupModule::DB(config) => {
-                lookup_mod = Some(Box::new(DBLookupModule::new(config, conn_pool.clone())));
+                match conn_pool.as_ref().cloned() {
+                    Some(pool) => {
+                        lookup_mod = Some(Box::new(DBLookupModule::new(config, pool)));
+                    }
+                    None => {
+                        eprintln!("config option db_url not set (needed by lookup_module)");
+                        std::process::exit(RC_TEMPFAIL);
+                    }
+                };
             }
         };
     };
@@ -201,13 +215,19 @@ fn main() {
         if let Some(vrfy_mod) = verify_mod {
             match module {
                 #[cfg(feature = "db")]
-                VerifyCacheModule::DB(config) => {
-                    verify_mod = Some(Box::new(DBCacheVerifyModule::new(
-                        config,
-                        conn_pool.clone(),
-                        vrfy_mod,
-                    )));
-                }
+                VerifyCacheModule::DB(config) => match conn_pool.as_ref().cloned() {
+                    Some(pool) => {
+                        verify_mod = Some(Box::new(DBCacheVerifyModule::new(
+                            config,
+                            pool,
+                            vrfy_mod,
+                        )));
+                    }
+                    None => {
+                        eprintln!("config option db_url not set (needed by verify_cache_module)");
+                        std::process::exit(RC_TEMPFAIL);
+                    }
+                },
                 VerifyCacheModule::File(config) => {
                     verify_mod = Some(Box::new(FileCacheVerifyModule::new(config, vrfy_mod)));
                 }
@@ -219,8 +239,14 @@ fn main() {
     if let Some(module) = config.update_credentials_module {
         match module {
             #[cfg(feature = "db")]
-            UpdateCredentialsModule::DB(config) => {
-                update_mod = Some(Box::new(DBUpdateCredentialsModule::new(config, conn_pool)));
+            UpdateCredentialsModule::DB(config) => match conn_pool.as_ref().cloned() {
+                Some(pool) => {
+                    update_mod = Some(Box::new(DBUpdateCredentialsModule::new(config, pool)));
+                },
+                None => {
+                    eprintln!("config option db_url not set (needed by update_credentials_module)");
+                    std::process::exit(RC_TEMPFAIL);
+                }
             }
         };
     };
