@@ -87,11 +87,17 @@ pub fn verify_hash(password: &str, hash: &str) -> bool {
     hash == hash1
 }
 
-pub fn get_matching_hash(password: &str, hash_list: &Vec<String>) -> Option<String> {
-    for hash in hash_list {
-        if verify_hash(password, hash) {
-            return Some(hash.to_string());
-        }
+pub fn get_matching_hash<H: AsRef<str>>(password: &str, hash_list: &mut Vec<H>) -> Option<H> {
+    if let Some(index) = hash_list.iter().position(|hash| verify_hash(password, hash.as_ref())) {
+        return Some(hash_list.remove(index));
     }
     None
+/*
+    for idx in hash_list {
+        if verify_hash(password, hash.as_ref()) {
+            return Some(*hash);
+        }
+    }
+*/
+//    None
 }

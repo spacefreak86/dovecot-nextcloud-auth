@@ -60,7 +60,7 @@ fn get_user(user: &mut DovecotUser, pool: &Pool, user_query: &str) -> AuthResult
                 let column_name = column.name_str();
                 let value = match column_name.as_ref() {
                     "uid" | "gid" => {
-                        from_value_opt::<i64>(row[column_name.as_ref()].clone())?.to_string()
+                        from_value_opt::<u64>(row[column_name.as_ref()].clone())?.to_string()
                     }
                     _ => from_value_opt::<String>(row[column_name.as_ref()].clone())?,
                 };
@@ -99,15 +99,15 @@ fn get_hashes(
     username: &str,
     pool: &Pool,
     cache_table: &str,
-    max_lifetime: i64,
-) -> AuthResult<Vec<(String, i64)>> {
+    max_lifetime: u64,
+) -> AuthResult<Vec<(String, u64)>> {
     let mut conn = pool.get_conn()?;
     let statement = format!(
         concat!("SELECT password, UNIX_TIMESTAMP() - UNIX_TIMESTAMP(last_verified) AS last_verified FROM {} ",
                 "WHERE username = :username AND UNIX_TIMESTAMP() - UNIX_TIMESTAMP(last_verified) <= :max_lifetime ORDER BY last_verified"),
         cache_table);
     let stmt = conn.prep(statement)?;
-    let hash_list: Vec<(String, i64)> = conn.exec_map(
+    let hash_list: Vec<(String, u64)> = conn.exec_map(
         &stmt,
         params! { "username" => username, "max_lifetime" => max_lifetime },
         |row: Row| {
@@ -149,7 +149,7 @@ fn delete_hash(username: &str, password: &str, pool: &Pool, cache_table: &str) -
     )?)
 }
 
-fn delete_dead_hashes(max_lifetime: i64, pool: &Pool, cache_table: &str) -> AuthResult<()> {
+fn delete_dead_hashes(max_lifetime: u64, pool: &Pool, cache_table: &str) -> AuthResult<()> {
     let mut conn = pool.get_conn()?;
     let statement = format!(
         "DELETE FROM {} WHERE UNIX_TIMESTAMP() - UNIX_TIMESTAMP(last_verified) > :max_lifetime",
@@ -196,8 +196,8 @@ impl CredentialsLookup for DBLookupModule {
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct DBCacheVerifyConfig {
     pub db_table: String,
-    pub verify_interval: i64,
-    pub max_lifetime: i64,
+    pub verify_interval: u64,
+    pub max_lifetime: u64,
     pub cleanup: bool,
     pub hash_scheme: Option<hashlib::Scheme>,
     pub allow_expired_on_error: bool,
@@ -274,11 +274,11 @@ impl CredentialsVerify for DBCacheVerifyModule {
                     }
                 }
 
-                if hashlib::get_matching_hash(password, &verified_hashes).is_some() {
+                if hashlib::get_matching_hash(password, &mut verified_hashes).is_some() {
                     return Ok(());
                 }
 
-                expired_hash = hashlib::get_matching_hash(password, &expired_hashes);
+                expired_hash = hashlib::get_matching_hash(password, &mut expired_hashes);
             }
             Err(err) => {
                 eprintln!("unable to read hashes from cache: {err}");

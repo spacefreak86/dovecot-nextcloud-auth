@@ -17,6 +17,9 @@ pub mod db;
 #[cfg(feature = "http")]
 pub mod http;
 
+#[cfg(feature = "serde")]
+pub mod file;
+
 pub(crate) use super::{hashlib, AuthResult, DovecotUser, Error};
 
 pub trait CredentialsLookup {

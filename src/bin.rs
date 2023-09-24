@@ -14,8 +14,9 @@
 #[cfg(feature = "db")]
 use dovecot_auth::modules::db::*;
 
+use dovecot_auth::modules::file::{FileCacheVerifyConfig, FileCacheVerifyModule};
 #[cfg(feature = "http")]
-use dovecot_auth::modules::http::{HttpVerifyConfig, HttpVerifyModule};
+use dovecot_auth::modules::http::*;
 
 use dovecot_auth::modules::{
     CredentialsLookup, CredentialsUpdate, CredentialsVerify, InternalVerifyModule,
@@ -48,6 +49,7 @@ pub enum VerifyModule {
 pub enum VerifyCacheModule {
     #[cfg(feature = "db")]
     DB(DBCacheVerifyConfig),
+    File(FileCacheVerifyConfig)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,7 +84,7 @@ impl Default for Config {
         #[cfg(feature = "db")]
         let verify_cache_module = Some(VerifyCacheModule::DB(DBCacheVerifyConfig::default()));
         #[cfg(not(feature = "db"))]
-        let verify_cache_module: Option<VerifyCacheModule> = None;
+        let verify_cache_module: Option<VerifyCacheModule> = Some(VerifyCacheModule::File(FileCacheVerifyConfig::default()));
 
         #[cfg(feature = "db")]
         let update_credentials_module = Some(UpdateCredentialsModule::DB(DBUpdateCredentialsConfig::default(),
@@ -200,6 +202,9 @@ fn main() {
                         conn_pool.clone(),
                         vrfy_mod,
                     )));
+                },
+                VerifyCacheModule::File(config) => {
+                    verify_mod = Some(Box::new(FileCacheVerifyModule::new(config, vrfy_mod)));
                 }
             };
         }
