@@ -16,6 +16,7 @@ serde = { version="*", features=["derive"] }
 toml = "*"
 bincode = "*"
 nix = { version="*", features=["process"] }
+fs2 = "*"
 urlencoding = "*"
 ureq = "*"
 base64 = "*"

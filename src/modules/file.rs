@@ -14,8 +14,11 @@
 use super::{hashlib, AuthResult, CredentialsVerify, DovecotUser, Error};
 
 use bincode;
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::prelude::*;
 use std::time::SystemTime;
 
 const DEFAULT_VERIFY_CACHE_FILE: &str = "/tmp/dovecot-auth-verify.cache";
@@ -78,17 +81,31 @@ struct VerifyCacheFile {
 
 impl VerifyCacheFile {
     fn from_path_or_default(path: &str) -> Self {
-        match std::fs::read(path) {
-            Ok(data) => bincode::deserialize(&data).unwrap_or_default(),
-            Err(_) => VerifyCacheFile::default(),
+        let mut cache = None;
+        if let Ok(mut file) = File::open(path) {
+            let mut data = Vec::new();
+            if file.lock_shared().is_ok() {
+                let res = file.read_to_end(&mut data);
+                let _ = file.unlock();
+                if res.is_ok() {
+                    if let Ok(res) = bincode::deserialize(&data) {
+                        cache = Some(res);
+                    }
+                }
+            }
         }
+        cache.unwrap_or_default()
     }
 
     fn write(&mut self, path: &str) -> AuthResult<()> {
         self.cleanup();
         match bincode::serialize(self) {
             Ok(contents) => {
-                std::fs::write(path, contents)?;
+                let mut file = File::open(path)?;
+                file.lock_exclusive()?;
+                file.set_len(0)?;
+                file.write_all(&contents)?;
+                file.unlock()?;
                 Ok(())
             }
             Err(err) => Err(Error::TempFail(err.to_string())),
