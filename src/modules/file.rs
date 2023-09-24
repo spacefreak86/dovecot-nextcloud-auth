@@ -80,30 +80,26 @@ struct VerifyCacheFile {
 }
 
 impl VerifyCacheFile {
-    fn from_path_or_default(path: &str) -> Self {
-        let mut cache = None;
-        if let Ok(mut file) = File::open(path) {
-            let mut data = Vec::new();
-            if file.lock_shared().is_ok() {
-                let res = file.read_to_end(&mut data);
-                let _ = file.unlock();
-                if res.is_ok() {
-                    if let Ok(res) = bincode::deserialize(&data) {
-                        cache = Some(res);
-                    }
-                }
-            }
-        }
-        cache.unwrap_or_default()
+    fn from_path(path: &str) -> AuthResult<Self> {
+        let mut file = File::open(path)?;
+        let mut data = Vec::new();
+        file.lock_shared()?;
+        file.read_to_end(&mut data)?;
+        file.unlock()?;
+        Ok(bincode::deserialize(&data)
+            .map_err(|err| Error::TempFail(format!("unable to deserialize: {err}")))?)
     }
 
     fn write(&mut self, path: &str) -> AuthResult<()> {
         self.cleanup();
         match bincode::serialize(self) {
             Ok(contents) => {
-                let mut file = File::open(path)?;
+                let mut file = match File::open(path) {
+                    Ok(f) => f,
+                    Err(_) => File::create(path)?,
+                };
                 file.lock_exclusive()?;
-                file.set_len(0)?;
+                file.set_len(contents.len() as u64)?;
                 file.write_all(&contents)?;
                 file.unlock()?;
                 Ok(())
@@ -185,7 +181,7 @@ impl VerifyCacheFile {
 
 impl CredentialsVerify for FileCacheVerifyModule {
     fn credentials_verify(&self, user: &DovecotUser, password: &str) -> AuthResult<()> {
-        let mut cache = VerifyCacheFile::from_path_or_default(&self.cache_file);
+        let mut cache = VerifyCacheFile::from_path(&self.cache_file).unwrap_or_default();
         cache.delete_hashes(self.config.max_lifetime);
 
         let (mut verified_hashes, mut expired_hashes) = cache.get_hashes(
