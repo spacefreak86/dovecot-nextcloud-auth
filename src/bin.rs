@@ -14,7 +14,7 @@
 #[cfg(feature = "db")]
 use dovecot_auth::modules::db::*;
 
-use dovecot_auth::modules::file::{FileCacheVerifyConfig, FileCacheVerifyModule};
+use dovecot_auth::modules::file::{BincodeCacheFile, FileCacheVerifyConfig, FileCacheVerifyModule};
 #[cfg(feature = "http")]
 use dovecot_auth::modules::http::*;
 
@@ -26,8 +26,13 @@ use dovecot_auth::{authenticate, AuthResult, Error, ReplyBin, RC_TEMPFAIL};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::env;
-use std::fs::read_to_string;
+use std::fs::File;
+use std::io::prelude::*;
 use std::path::Path;
+use std::time::SystemTime;
+
+const MYNAME: &str = clap::crate_name!();
+const DEFAULT_CONFIG_CACHE_FILE: &str = "/tmp/dovecot-auth-config.cache";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -62,6 +67,7 @@ pub enum UpdateCredentialsModule {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     configured: bool,
+    config_cache_file: Option<String>,
     #[cfg(feature = "db")]
     db_url: Option<String>,
     lookup_module: Option<LookupModule>,
@@ -98,6 +104,7 @@ impl Default for Config {
 
         Self {
             configured: false,
+            config_cache_file: Some(String::from(DEFAULT_CONFIG_CACHE_FILE)),
             #[cfg(feature = "db")]
             db_url: Some(String::from("mysql://DBUSER:DBPASS@localhost:3306/postfix")),
             lookup_module,
@@ -136,28 +143,63 @@ struct Args {
     args: Option<Vec<String>>,
 }
 
-fn parse_config_file<P: AsRef<Path>>(path: P) -> AuthResult<Config> {
-    let content = read_to_string(&path)?;
-    Ok(toml::from_str(&content)?)
+fn parse_config_file(mut config_file: File, cache_file: Option<File>) -> AuthResult<Config> {
+    let mut content = String::new();
+    config_file.read_to_string(&mut content)?;
+    let config: Config = toml::from_str(&content)?;
+    if let Some(file) = cache_file {
+        config.save_to_file(&file).unwrap_or_else(|err| {
+            eprintln!("unable to write config cache file: {err}");
+        });
+    }
+    Ok(config)
+}
+
+fn get_modified(file: &File) -> AuthResult<SystemTime> {
+    Ok(file.metadata()?.modified()?)
+}
+
+fn read_config_file<P, C>(config_path: P, cache_path: Option<C>) -> AuthResult<Config>
+where
+    P: AsRef<Path>,
+    C: AsRef<Path>,
+{
+    let config_file = File::open(config_path)?;
+    let opt_cache_file = cache_path.map(|path| File::open(path).ok()).flatten();
+
+    let config = match &opt_cache_file {
+        Some(cache_file) => {
+            let cache_modified = get_modified(cache_file).unwrap_or(SystemTime::UNIX_EPOCH);
+            let config_modified = get_modified(&config_file).unwrap_or(SystemTime::now());
+            match config_modified.duration_since(cache_modified) {
+                Ok(_) => parse_config_file(config_file, opt_cache_file)?,
+                Err(_) => Config::load_from_file(&cache_file)
+                    .unwrap_or(parse_config_file(config_file, opt_cache_file)?),
+            }
+        }
+        None => parse_config_file(config_file, opt_cache_file)?,
+    };
+    Ok(config)
 }
 
 fn main() {
     let args = Args::parse();
-    let myname = clap::crate_name!();
 
     if args.print_example_config {
         print_example_config();
         std::process::exit(0);
     }
 
-    let path = env::var("DOVECOT_AUTH_CONFIG").unwrap_or(format!("/etc/dovecot/{myname}.toml"));
-    let config = parse_config_file(&path).unwrap_or_else(|err| {
-        eprintln!("unable to read config file {path}: {err}");
+    let path = env::var("DOVECOT_AUTH_CONFIG").unwrap_or(format!("/etc/dovecot/{MYNAME}.toml"));
+    let cache_path = env::var("DOVECOT_AUTH_CONFIG_CACHE").ok();
+
+    let config = read_config_file(&path, cache_path).unwrap_or_else(|err| {
+        eprintln!("config file error: {path}: {err}");
         std::process::exit(err.exit_code());
     });
 
     if !config.configured {
-        eprintln!("{myname} is not configured");
+        eprintln!("{MYNAME} is not configured");
         std::process::exit(RC_TEMPFAIL);
     }
 
