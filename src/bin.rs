@@ -148,7 +148,7 @@ fn main() {
         std::process::exit(0);
     }
 
-    let path = env::var("DOVECOT_AUTH_CONFIG").unwrap_or(format!("/etc/{myname}.toml"));
+    let path = env::var("DOVECOT_AUTH_CONFIG").unwrap_or(format!("/etc/dovecot/{myname}.toml"));
     let config = parse_config_file(&path).unwrap_or_else(|err| {
         eprintln!("unable to read config file {path}: {err}");
         std::process::exit(err.exit_code());
