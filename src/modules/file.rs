@@ -24,7 +24,7 @@ use std::time::SystemTime;
 
 const DEFAULT_VERIFY_CACHE_FILE: &str = "/tmp/dovecot-auth-verify.cache";
 
-pub trait BincodeCacheFile
+pub trait BinaryCacheFile
 where
     Self: Serialize + DeserializeOwned,
 {
@@ -50,7 +50,7 @@ where
     }
 }
 
-impl<T> BincodeCacheFile for T where T: Serialize + DeserializeOwned {}
+impl<T> BinaryCacheFile for T where T: Serialize + DeserializeOwned {}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct FileCacheVerifyConfig {

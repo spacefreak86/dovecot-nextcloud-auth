@@ -14,7 +14,7 @@
 #[cfg(feature = "db")]
 use dovecot_auth::modules::db::*;
 
-use dovecot_auth::modules::file::{BincodeCacheFile, FileCacheVerifyConfig, FileCacheVerifyModule};
+use dovecot_auth::modules::file::{BinaryCacheFile, FileCacheVerifyConfig, FileCacheVerifyModule};
 #[cfg(feature = "http")]
 use dovecot_auth::modules::http::*;
 
