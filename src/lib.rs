@@ -23,7 +23,7 @@ use std::fs::File;
 use std::io::Read;
 use std::os::unix::io::FromRawFd;
 
-use modules::{CredentialsLookup, CredentialsUpdate, CredentialsVerify};
+use modules::{CredentialsLookup, CredentialsUpdate, CredentialsVerify, InternalVerifyModule};
 
 pub const RC_PERMFAIL: i32 = 1;
 pub const RC_NOUSER: i32 = 3;
@@ -181,6 +181,7 @@ pub fn authenticate(
     lookup_mod: &Option<Box<dyn CredentialsLookup>>,
     verify_mod: &Option<Box<dyn CredentialsVerify>>,
     update_mod: &Option<Box<dyn CredentialsUpdate>>,
+    allow_internal_verify_hosts: &Option<Vec<String>>,
     reply_bin: &ReplyBin,
     fd: Option<i32>,
 ) -> AuthResult<Infallible> {
@@ -208,15 +209,33 @@ pub fn authenticate(
     }
 
     if !credentials_lookup {
-        match verify_mod {
-            Some(module) => {
-                module.credentials_verify(&user, &password)?;
+        let mut internal_verify_ok = false;
+
+        if let Some(allowed) = allow_internal_verify_hosts {
+            if let Ok(remote_ip) = env::var("REMOTE_IP") {
+                if !remote_ip.is_empty()
+                    && !user.password.is_empty()
+                    && allowed.contains(&remote_ip)
+                    && InternalVerifyModule::new()
+                        .credentials_verify(&user, &user.password)
+                        .is_ok()
+                {
+                    internal_verify_ok = true;
+                }
             }
-            None => {
-                return Err(Error::TempFail(
-                    "unable to verify credentials, very module not loaded".to_string(),
-                ));
-            }
+        }
+
+        if !internal_verify_ok {
+            match verify_mod {
+                Some(module) => {
+                    module.credentials_verify(&user, &password)?;
+                }
+                None => {
+                    return Err(Error::TempFail(
+                        "unable to verify credentials, very module not loaded".to_string(),
+                    ));
+                }
+            };
         }
     }
 
@@ -224,34 +243,3 @@ pub fn authenticate(
         .call(&user)
         .map_err(|err| Error::TempFail(format!("unable to call reply_bin: {err}")))
 }
-
-/*
-
-
-#[derive(Deserialize)]
-pub struct Config {
-    db_url: String,
-    user_query: String,
-    update_password_query: String,
-    update_hash_scheme: String,
-    hash_scheme: String,
-    db_auth_hosts: Vec<String>,
-    nextcloud_url: String,
-    cache_table: String,
-    cache_verify_interval: i64,
-    cache_max_lifetime: i64,
-    cache_cleanup: bool,
-}
-
-        let remote_ip = env::var("REMOTE_IP").unwrap_or("".to_string());
-        if !remote_ip.is_empty() && !user.password.is_empty() && config.db_auth_hosts.contains(&remote_ip) {
-            if !hashlib::verify_hash(&password, &user.password) {
-                return Err(AuthError::Perm);
-            }
-        } else {
-            authenticator.credentials_verify(&user.user, &password, &scheme)?
-        }
-    }
-    authenticator.call_reply_bin(&user)
-}
-*/

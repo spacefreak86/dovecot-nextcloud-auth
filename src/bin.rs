@@ -68,6 +68,7 @@ pub struct Config {
     verify_module: Option<VerifyModule>,
     verify_cache_module: Option<VerifyCacheModule>,
     update_credentials_module: Option<UpdateCredentialsModule>,
+    allow_internal_verify_hosts: Option<Vec<String>>,
 }
 
 impl Default for Config {
@@ -103,6 +104,7 @@ impl Default for Config {
             verify_module,
             verify_cache_module,
             update_credentials_module,
+            allow_internal_verify_hosts: Some(vec![]),
         }
     }
 }
@@ -248,7 +250,14 @@ fn main() {
         };
     };
 
-    let rc = match authenticate(&lookup_mod, &verify_mod, &update_mod, &reply_bin, fd) {
+    let rc = match authenticate(
+        &lookup_mod,
+        &verify_mod,
+        &update_mod,
+        &config.allow_internal_verify_hosts,
+        &reply_bin,
+        fd,
+    ) {
         Ok(_) => 0,
         Err(err) => {
             match &err {

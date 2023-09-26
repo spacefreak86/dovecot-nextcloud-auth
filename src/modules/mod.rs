@@ -34,7 +34,14 @@ pub trait CredentialsUpdate {
     fn update_credentials(&self, user: &DovecotUser, password: &str) -> AuthResult<()>;
 }
 
+#[derive(Debug, Default, Clone)]
 pub struct InternalVerifyModule {}
+
+impl InternalVerifyModule {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
 
 impl CredentialsVerify for InternalVerifyModule {
     fn credentials_verify(&self, user: &DovecotUser, password: &str) -> AuthResult<()> {
