@@ -28,7 +28,7 @@ pub trait BinaryCacheFile
 where
     Self: Serialize + DeserializeOwned,
 {
-    fn load_from_file(file: &mut File) -> AuthResult<Self> {
+    fn load_from_file(mut file: File) -> AuthResult<Self> {
         file.lock_shared()?;
         let mut buf = Vec::new();
         file.read_to_end(&mut buf)?;
@@ -38,7 +38,7 @@ where
         Ok(instance)
     }
 
-    fn save_to_file(&self, file: &mut File) -> AuthResult<()> {
+    fn save_to_file(&self, mut file: File) -> AuthResult<()> {
         match bincode::serialize(self) {
             Ok(contents) => {
                 file.lock_exclusive()?;
@@ -195,7 +195,7 @@ impl VerifyCacheFile {
 impl CredentialsVerify for FileCacheVerifyModule {
     fn credentials_verify(&self, user: &DovecotUser, password: &str) -> AuthResult<()> {
         let mut cache = match File::options().write(true).open(&self.cache_file) {
-            Ok(mut file) => VerifyCacheFile::load_from_file(&mut file)?,
+            Ok(file) => VerifyCacheFile::load_from_file(file)?,
             Err(_) => VerifyCacheFile::default(),
         };
 
@@ -239,17 +239,17 @@ impl CredentialsVerify for FileCacheVerifyModule {
 
         if cache.changed {
             match File::options().write(true).open(&self.cache_file) {
-                Ok(mut file) => {
-                    cache.save_to_file(&mut file).unwrap_or_else(|err| {
+                Ok(file) => {
+                    cache.save_to_file(file).unwrap_or_else(|err| {
                         eprintln!("unable to write cache_file: {err}");
                     });
                 }
                 Err(_) => match File::create(&self.cache_file) {
-                    Ok(mut file) => {
+                    Ok(file) => {
                         if let Ok(metadata) = file.metadata() {
                             metadata.permissions().set_mode(0o600);
                         }
-                        cache.save_to_file(&mut file).unwrap_or_else(|err| {
+                        cache.save_to_file(file).unwrap_or_else(|err| {
                             eprintln!("unable to write cache_file: {err}");
                         });
                     }
