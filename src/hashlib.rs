@@ -76,7 +76,13 @@ pub fn verify_hash(password: &str, hash: &str) -> bool {
     let mut hash1 = String::new();
     if hash.starts_with("{SSHA512}") {
         match general_purpose::STANDARD.decode(hash.trim_start_matches("{SSHA512}")) {
-            Ok(salt) => hash1 = ssha512(password.as_bytes(), &salt),
+            Ok(decoded_hash) => {
+                if decoded_hash.len() < 65 {
+                    return false;
+                }
+                let salt = &decoded_hash[64..];
+                hash1 = ssha512(password.as_bytes(), &salt)
+            }
             _ => eprintln!("base64: unable to decode hash: {hash}"),
         }
     } else if hash.starts_with("{SHA512}") {
@@ -95,4 +101,47 @@ pub fn get_matching_hash<H: AsRef<str>>(password: &str, hash_list: &mut Vec<H>) 
         return Some(hash_list.remove(index));
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::hashlib::{get_matching_hash, hash, verify_hash, Scheme};
+
+    const TEST_PASSWORD: &'static str = "TestPass ä?=%*@+-ç£{}()!#\"'~`";
+
+    #[test]
+    fn test_ssha512_hash_and_verify() {
+        let test_hash = hash(&TEST_PASSWORD, &Scheme::SSHA512);
+        assert_eq!(verify_hash(TEST_PASSWORD, &test_hash), true);
+    }
+
+    #[test]
+    fn test_sha512_hash_and_verify() {
+        let test_hash = hash(&TEST_PASSWORD, &Scheme::SHA512);
+        assert_eq!(verify_hash(TEST_PASSWORD, &test_hash), true);
+    }
+
+    #[test]
+    fn test_get_matching_hash() {
+        let ssha512_hash = hash(TEST_PASSWORD, &Scheme::SSHA512);
+        let sha512_hash = hash(TEST_PASSWORD, &Scheme::SHA512);
+
+        let mut hashes = vec![
+            hash("AnotherTestPassword", &Scheme::SSHA512),
+            ssha512_hash.clone(),
+            hash("AndAnotherTestPassword", &Scheme::SHA512),
+        ];
+        assert_eq!(
+            get_matching_hash(TEST_PASSWORD, &mut hashes),
+            Some(ssha512_hash)
+        );
+        assert_eq!(get_matching_hash(TEST_PASSWORD, &mut hashes), None);
+
+        hashes.push(sha512_hash.clone());
+        assert_eq!(
+            get_matching_hash(TEST_PASSWORD, &mut hashes),
+            Some(sha512_hash)
+        );
+        assert_eq!(get_matching_hash(TEST_PASSWORD, &mut hashes), None);
+    }
 }
