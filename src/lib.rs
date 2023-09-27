@@ -138,7 +138,7 @@ fn read_credentials_from_fd(fd: Option<i32>) -> AuthResult<(String, String)> {
     f.read_to_string(&mut input)?;
 
     let credentials: Vec<&str> = input.split('\0').collect();
-    if credentials.len() == 2 {
+    if credentials.len() == 3 {
         Ok((credentials[0].to_string(), credentials[1].to_string()))
     } else {
         Err(Error::TempFail(format!(
@@ -214,10 +214,9 @@ pub fn authenticate(
         if let Some(allowed) = allow_internal_verify_hosts {
             if let Ok(remote_ip) = env::var("REMOTE_IP") {
                 if !remote_ip.is_empty()
-                    && !user.password.is_empty()
                     && allowed.contains(&remote_ip)
                     && InternalVerifyModule::new()
-                        .credentials_verify(&user, &user.password)
+                        .credentials_verify(&user, &password)
                         .is_ok()
                 {
                     internal_verified = true;

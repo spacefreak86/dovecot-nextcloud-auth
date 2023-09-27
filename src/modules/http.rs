@@ -34,7 +34,7 @@ impl Default for HttpVerifyConfig {
             url: String::from("https://localhost/auth"),
             method: String::from("GET"),
             ok_code: 200,
-            invalid_code: 403,
+            invalid_code: 401,
         }
     }
 }

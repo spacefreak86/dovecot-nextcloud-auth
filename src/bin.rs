@@ -147,8 +147,8 @@ fn parse_config_file(mut config_file: File, cache_file: Option<File>) -> AuthRes
     let mut content = String::new();
     config_file.read_to_string(&mut content)?;
     let config: Config = toml::from_str(&content)?;
-    if let Some(file) = cache_file {
-        config.save_to_file(&file).unwrap_or_else(|err| {
+    if let Some(mut file) = cache_file {
+        config.save_to_file(&mut file).unwrap_or_else(|err| {
             eprintln!("unable to write config cache file: {err}");
         });
     }
@@ -165,15 +165,15 @@ where
     C: AsRef<Path>,
 {
     let config_file = File::open(config_path)?;
-    let opt_cache_file = cache_path.map(|path| File::open(path).ok()).flatten();
+    let mut opt_cache_file = cache_path.map(|path| File::open(path).ok()).flatten();
 
-    let config = match &opt_cache_file {
+    let config = match &mut opt_cache_file {
         Some(cache_file) => {
             let cache_modified = get_modified(cache_file).unwrap_or(SystemTime::UNIX_EPOCH);
             let config_modified = get_modified(&config_file).unwrap_or(SystemTime::now());
             match config_modified.duration_since(cache_modified) {
                 Ok(_) => parse_config_file(config_file, opt_cache_file)?,
-                Err(_) => Config::load_from_file(&cache_file)
+                Err(_) => Config::load_from_file(cache_file)
                     .unwrap_or(parse_config_file(config_file, opt_cache_file)?),
             }
         }
