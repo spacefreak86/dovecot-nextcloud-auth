@@ -348,9 +348,8 @@ impl DBUpdateCredentialsModule {
 
 impl CredentialsUpdate for DBUpdateCredentialsModule {
     fn update_credentials(&self, user: &DovecotUser, password: &str) -> AuthResult<()> {
-        if !user.password.is_empty() && !self.config.update_password_query.is_empty() {
+        if !self.config.update_password_query.is_empty() {
             let hash_prefix: String = format!("{{{}}}", &self.config.hash_scheme.as_str());
-            //if !user.password.starts_with(&hash_prefix) && hashlib::verify_hash(password, &user.password) {
             let verifier = super::InternalVerifyModule {};
             if !user.password.starts_with(&hash_prefix)
                 && verifier.credentials_verify(user, password).is_ok()

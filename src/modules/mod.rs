@@ -45,6 +45,10 @@ impl InternalVerifyModule {
 
 impl CredentialsVerify for InternalVerifyModule {
     fn credentials_verify(&self, user: &DovecotUser, password: &str) -> AuthResult<()> {
+        if user.password.is_empty() {
+            return Err(Error::PermFail);
+        }
+
         match hashlib::verify_hash(password, &user.password) {
             true => Ok(()),
             false => Err(Error::PermFail),

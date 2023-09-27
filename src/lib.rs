@@ -188,28 +188,28 @@ pub fn authenticate(
     let (username, password) = read_credentials_from_fd(fd)?;
     let mut user = DovecotUser::new(username);
 
-    let credentials_lookup = env::var("CREDENTIALS_LOOKUP").unwrap_or_default() == "1";
-
-    match lookup_mod {
-        Some(module) => {
-            module.credentials_lookup(&mut user)?;
-            if credentials_lookup && env::var("AUTHORIZED").unwrap_or_default() == "1" {
-                env::set_var("AUTHORIZED", "2");
+    if env::var("CREDENTIALS_LOOKUP").unwrap_or_default() == "1" {
+        match lookup_mod {
+            Some(module) => {
+                module.credentials_lookup(&mut user)?;
+                if env::var("AUTHORIZED").unwrap_or_default() == "1" {
+                    env::set_var("AUTHORIZED", "2");
+                }
             }
-        }
-        None => {
-            if credentials_lookup {
+            None => {
                 return Err(Error::NoUser);
             }
         }
-    }
+    } else {
+        if let Some(module) = lookup_mod {
+            if module.credentials_lookup(&mut user).is_ok() {
+                if let Some(module) = update_mod {
+                    module.update_credentials(&user, &password)?;
+                }
+            }
+        }
 
-    if let Some(module) = update_mod {
-        module.update_credentials(&user, &password)?;
-    }
-
-    if !credentials_lookup {
-        let mut internal_verify_ok = false;
+        let mut internal_verified = false;
 
         if let Some(allowed) = allow_internal_verify_hosts {
             if let Ok(remote_ip) = env::var("REMOTE_IP") {
@@ -220,12 +220,12 @@ pub fn authenticate(
                         .credentials_verify(&user, &user.password)
                         .is_ok()
                 {
-                    internal_verify_ok = true;
+                    internal_verified = true;
                 }
             }
         }
 
-        if !internal_verify_ok {
+        if !internal_verified {
             match verify_mod {
                 Some(module) => {
                     module.credentials_verify(&user, &password)?;
@@ -237,7 +237,7 @@ pub fn authenticate(
                 }
             };
         }
-    }
+    };
 
     reply_bin
         .call(&user)
