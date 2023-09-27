@@ -81,7 +81,7 @@ pub fn verify_hash(password: &str, hash: &str) -> bool {
                     return false;
                 }
                 let salt = &decoded_hash[64..];
-                hash1 = ssha512(password.as_bytes(), &salt)
+                hash1 = ssha512(password.as_bytes(), salt)
             }
             _ => eprintln!("base64: unable to decode hash: {hash}"),
         }
