@@ -18,7 +18,6 @@ use fs2::FileExt;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::prelude::*;
 use std::os::unix::fs::PermissionsExt;
 use std::time::SystemTime;
 
@@ -28,27 +27,21 @@ pub trait BinaryCacheFile
 where
     Self: Serialize + DeserializeOwned,
 {
-    fn load_from_file(mut file: File) -> AuthResult<Self> {
+    fn load_from_file(file: File) -> AuthResult<Self> {
         file.lock_shared()?;
-        let mut buf = Vec::new();
-        file.read_to_end(&mut buf)?;
-        let instance = bincode::deserialize(&buf)
+        let instance: Self = bincode::deserialize_from(&file)
             .map_err(|err| Error::TempFail(format!("unable to deserialize: {err}",)))?;
         file.unlock()?;
         Ok(instance)
     }
 
     fn save_to_file(&self, mut file: File) -> AuthResult<()> {
-        match bincode::serialize(self) {
-            Ok(contents) => {
-                file.lock_exclusive()?;
-                file.set_len(0)?;
-                file.write_all(&contents)?;
-                file.unlock()?;
-                Ok(())
-            }
-            Err(err) => Err(Error::TempFail(err.to_string())),
-        }
+        file.lock_exclusive()?;
+        file.set_len(0)?;
+        bincode::serialize_into(&mut file, self)
+            .map_err(|err| Error::TempFail(err.to_string()))?;
+        file.unlock()?;
+        Ok(())
     }
 }
 
@@ -75,42 +68,50 @@ impl Default for FileCacheVerifyConfig {
     }
 }
 
-pub struct FileCacheVerifyModule {
-    config: FileCacheVerifyConfig,
-    cache_file: String,
-    module: Box<dyn CredentialsVerify>,
-    hash_scheme: hashlib::Scheme,
+type Cache = HashMap<String, HashMap<String, SystemTime>>;
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+struct VerifyCacheFile {
+    cache: Cache
 }
 
-impl FileCacheVerifyModule {
-    pub fn new(config: FileCacheVerifyConfig, module: Box<dyn CredentialsVerify>) -> Self {
-        let hash_scheme = config
-            .hash_scheme
-            .as_ref()
-            .cloned()
-            .unwrap_or(hashlib::Scheme::SSHA512);
-        let cache_file = config
-            .cache_file
-            .as_ref()
-            .cloned()
-            .unwrap_or(DEFAULT_VERIFY_CACHE_FILE.to_string());
-        Self {
-            config,
-            cache_file,
-            module,
-            hash_scheme,
-        }
+impl std::ops::Deref for VerifyCacheFile {
+    type Target = Cache;
+
+    fn deref(&self) -> &Self::Target {
+        &self.cache
     }
 }
 
-#[derive(Default, Debug, Clone, Deserialize, Serialize)]
-struct VerifyCacheFile {
-    cache: HashMap<String, HashMap<String, SystemTime>>,
-    #[serde(skip_serializing, default)]
-    changed: bool,
+impl std::ops::DerefMut for VerifyCacheFile {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.cache
+    }
 }
 
-impl VerifyCacheFile {
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+struct VerifyCache {
+    cache: VerifyCacheFile,
+    changed: bool
+}
+
+impl VerifyCache {
+    fn load_from_file(file: File) -> AuthResult<Self> {
+        let cache = VerifyCacheFile::load_from_file(file)?;
+        Ok(Self {
+            cache,
+            changed: false,
+        })
+    }
+
+    fn save_to_file(&self, file: File) -> AuthResult<()> {
+        self.cache.save_to_file(file)
+    }
+}
+
+
+impl VerifyCache {
     fn insert(&mut self, username: &str, hash: String) {
         match self.cache.get_mut(username) {
             Some(hashes) => {
@@ -192,11 +193,42 @@ impl VerifyCacheFile {
     }
 }
 
+pub struct FileCacheVerifyModule {
+    config: FileCacheVerifyConfig,
+    cache_file: String,
+    module: Box<dyn CredentialsVerify>,
+    hash_scheme: hashlib::Scheme,
+}
+
+impl FileCacheVerifyModule {
+    pub fn new(config: FileCacheVerifyConfig, module: Box<dyn CredentialsVerify>) -> Self {
+        let hash_scheme = config
+            .hash_scheme
+            .as_ref()
+            .cloned()
+            .unwrap_or(hashlib::Scheme::SSHA512);
+        let cache_file = config
+            .cache_file
+            .as_ref()
+            .cloned()
+            .unwrap_or(DEFAULT_VERIFY_CACHE_FILE.to_string());
+        Self {
+            config,
+            cache_file,
+            module,
+            hash_scheme,
+        }
+    }
+}
+
 impl CredentialsVerify for FileCacheVerifyModule {
     fn credentials_verify(&self, user: &DovecotUser, password: &str) -> AuthResult<()> {
-        let mut cache = match File::options().write(true).open(&self.cache_file) {
-            Ok(file) => VerifyCacheFile::load_from_file(file)?,
-            Err(_) => VerifyCacheFile::default(),
+        let mut cache = match File::open(&self.cache_file) {
+            Ok(file) => VerifyCache::load_from_file(file).unwrap_or_else(|err| {
+                eprintln!("unable to deserialize cache: {err}");
+                VerifyCache::default()
+            }),
+            Err(_) => VerifyCache::default(),
         };
 
         cache.delete_hashes(self.config.max_lifetime);
