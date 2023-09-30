@@ -20,18 +20,80 @@ pub mod http;
 #[cfg(feature = "serde")]
 pub mod file;
 
-pub(crate) use super::{hashlib, AuthResult, DovecotUser, Error};
+use crate::{hashlib, AuthResult, DovecotUser};
 
 pub trait CredentialsLookup {
-    fn credentials_lookup(&self, user: &mut DovecotUser) -> AuthResult<()>;
+    fn credentials_lookup(&mut self, user: &mut DovecotUser) -> AuthResult<bool>;
 }
 
 pub trait CredentialsVerify {
-    fn credentials_verify(&self, user: &DovecotUser, password: &str) -> AuthResult<()>;
+    fn credentials_verify(&mut self, user: &DovecotUser, password: &str) -> AuthResult<bool>;
 }
 
 pub trait CredentialsUpdate {
     fn update_credentials(&self, user: &DovecotUser, password: &str) -> AuthResult<()>;
+}
+
+pub trait CredentialsVerifyCache: CredentialsVerify {
+    fn hash(&self, password: &str) -> String;
+    fn get_hashes(&self, user: &str) -> AuthResult<(Vec<String>, Vec<String>)>;
+    fn insert(&mut self, user: &str, hash: &str) -> AuthResult<()>;
+    fn delete(&mut self, user: &str, hash: &str) -> AuthResult<()>;
+    fn cleanup(&mut self) -> AuthResult<()>;
+    fn module(&mut self) -> &mut Box<dyn CredentialsVerify>;
+    fn allow_expired_on_error(&self) -> bool;
+    fn save(&self);
+    fn cached_credentials_verify(
+        &mut self,
+        user: &DovecotUser,
+        password: &str,
+    ) -> AuthResult<bool> {
+        self.cleanup().unwrap_or_else(|err| {
+            eprintln!("unable to cleanup cache: {err}");
+        });
+
+        let (mut verified_hashes, mut expired_hashes) =
+            self.get_hashes(&user.user).unwrap_or_else(|err| {
+                eprintln!("unable to get hashes from cache: {err}");
+                Default::default()
+            });
+        if hashlib::get_matching_hash(password, &mut verified_hashes).is_some() {
+            return Ok(true);
+        }
+
+        let expired_hash = hashlib::get_matching_hash(password, &mut expired_hashes);
+        let res = match self.module().credentials_verify(user, password) {
+            Ok(true) => {
+                let hash = expired_hash.unwrap_or_else(|| self.hash(password));
+                self.insert(&user.user, &hash).unwrap_or_else(|err| {
+                    eprintln!("unable to insert hash into cache: {err}");
+                });
+                Ok(true)
+            }
+            Ok(false) => {
+                if let Some(hash) = expired_hash {
+                    self.delete(&user.user, &hash).unwrap_or_else(|err| {
+                        eprintln!("unable to delete hash from cache: {err}");
+                    });
+                }
+                Ok(false)
+            }
+            Err(err) => match self.allow_expired_on_error() {
+                true => Ok(expired_hash.is_some()),
+                false => Err(err),
+            },
+        };
+
+        self.save();
+
+        res
+    }
+}
+
+impl<T: CredentialsVerifyCache> CredentialsVerify for T {
+    fn credentials_verify(&mut self, user: &DovecotUser, password: &str) -> AuthResult<bool> {
+        self.cached_credentials_verify(user, password)
+    }
 }
 
 #[derive(Debug, Default, Clone)]
@@ -44,14 +106,11 @@ impl InternalVerifyModule {
 }
 
 impl CredentialsVerify for InternalVerifyModule {
-    fn credentials_verify(&self, user: &DovecotUser, password: &str) -> AuthResult<()> {
+    fn credentials_verify(&mut self, user: &DovecotUser, password: &str) -> AuthResult<bool> {
         if user.password.is_empty() {
-            return Err(Error::PermFail);
+            return Ok(false);
         }
 
-        match hashlib::verify_hash(password, &user.password) {
-            true => Ok(()),
-            false => Err(Error::PermFail),
-        }
+        Ok(hashlib::verify_hash(password, &user.password))
     }
 }

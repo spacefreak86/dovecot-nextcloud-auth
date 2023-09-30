@@ -11,11 +11,12 @@
 // You should have received a copy of the GNU General Public License
 // along with dovecot-auth.  If not, see <http://www.gnu.org/licenses/>.
 
-use super::{hashlib, AuthResult, CredentialsVerify, DovecotUser, Error};
+use crate::{hashlib, AuthError, AuthResult, CredentialsVerify, CredentialsVerifyCache};
 
 use bincode;
 use fs2::FileExt;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+
 use std::collections::HashMap;
 use std::fs::File;
 use std::os::unix::fs::PermissionsExt;
@@ -30,7 +31,7 @@ where
     fn load_from_file(file: File) -> AuthResult<Self> {
         file.lock_shared()?;
         let instance: Self = bincode::deserialize_from(&file)
-            .map_err(|err| Error::TempFail(format!("unable to deserialize: {err}",)))?;
+            .map_err(|err| AuthError::TempFail(format!("unable to deserialize: {err}",)))?;
         file.unlock()?;
         Ok(instance)
     }
@@ -39,7 +40,7 @@ where
         file.lock_exclusive()?;
         file.set_len(0)?;
         bincode::serialize_into(&mut file, self)
-            .map_err(|err| Error::TempFail(err.to_string()))?;
+            .map_err(|err| AuthError::TempFail(err.to_string()))?;
         file.unlock()?;
         Ok(())
     }
@@ -72,7 +73,7 @@ type Cache = HashMap<String, HashMap<String, SystemTime>>;
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 struct VerifyCacheFile {
-    cache: Cache
+    cache: Cache,
 }
 
 impl std::ops::Deref for VerifyCacheFile {
@@ -89,11 +90,24 @@ impl std::ops::DerefMut for VerifyCacheFile {
     }
 }
 
-
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 struct VerifyCache {
     cache: VerifyCacheFile,
-    changed: bool
+    changed: bool,
+}
+
+impl std::ops::Deref for VerifyCache {
+    type Target = VerifyCacheFile;
+
+    fn deref(&self) -> &Self::Target {
+        &self.cache
+    }
+}
+
+impl std::ops::DerefMut for VerifyCache {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.cache
+    }
 }
 
 impl VerifyCache {
@@ -110,22 +124,7 @@ impl VerifyCache {
     }
 }
 
-
 impl VerifyCache {
-    fn insert(&mut self, username: &str, hash: String) {
-        match self.cache.get_mut(username) {
-            Some(hashes) => {
-                hashes.insert(hash, SystemTime::now());
-            }
-            None => {
-                let mut hashes = HashMap::new();
-                hashes.insert(hash, SystemTime::now());
-                self.cache.insert(username.to_string(), hashes);
-            }
-        };
-        self.changed = true;
-    }
-
     fn get_hashes(
         &self,
         username: &str,
@@ -149,7 +148,7 @@ impl VerifyCache {
         (verified_hashes, expired_hashes)
     }
 
-    fn delete_hashes(&mut self, max_lifetime: u64) {
+    fn cleanup(&mut self, max_lifetime: u64) {
         let now = SystemTime::now();
         let mut cleanup = false;
         for hashes in self.cache.values_mut() {
@@ -173,28 +172,29 @@ impl VerifyCache {
             }
         }
         if cleanup {
-            self.cleanup();
+            self.cache.retain(|_, hashes| !hashes.is_empty());
         }
     }
 
-    fn delete_hash(&mut self, username: &str, hash: &str) {
+    fn delete(&mut self, username: &str, hash: &str) {
+        let mut cleanup = false;
         if let Some(hashes) = self.cache.get_mut(username) {
             if hashes.remove(hash).is_some() {
                 self.changed = true;
             }
             if hashes.is_empty() {
-                self.cleanup();
+                cleanup = true;
             }
         }
-    }
-
-    fn cleanup(&mut self) {
-        self.cache.retain(|_, hashes| !hashes.is_empty());
+        if cleanup {
+            self.cache.retain(|_, hashes| !hashes.is_empty());
+        }
     }
 }
 
 pub struct FileCacheVerifyModule {
     config: FileCacheVerifyConfig,
+    cache: VerifyCache,
     cache_file: String,
     module: Box<dyn CredentialsVerify>,
     hash_scheme: hashlib::Scheme,
@@ -212,8 +212,21 @@ impl FileCacheVerifyModule {
             .as_ref()
             .cloned()
             .unwrap_or(DEFAULT_VERIFY_CACHE_FILE.to_string());
+        let cache = config
+            .cache_file
+            .as_ref()
+            .map(|path| match File::open(path) {
+                Ok(file) => VerifyCache::load_from_file(file).unwrap_or_else(|err| {
+                    eprintln!("unable to deserialize cache: {err}");
+                    VerifyCache::default()
+                }),
+                Err(_) => VerifyCache::default(),
+            })
+            .unwrap_or_default();
+
         Self {
             config,
+            cache,
             cache_file,
             module,
             hash_scheme,
@@ -221,58 +234,47 @@ impl FileCacheVerifyModule {
     }
 }
 
-impl CredentialsVerify for FileCacheVerifyModule {
-    fn credentials_verify(&self, user: &DovecotUser, password: &str) -> AuthResult<()> {
-        let mut cache = match File::open(&self.cache_file) {
-            Ok(file) => VerifyCache::load_from_file(file).unwrap_or_else(|err| {
-                eprintln!("unable to deserialize cache: {err}");
-                VerifyCache::default()
-            }),
-            Err(_) => VerifyCache::default(),
-        };
+impl CredentialsVerifyCache for FileCacheVerifyModule {
+    fn hash(&self, password: &str) -> String {
+        hashlib::hash(password, &self.hash_scheme)
+    }
 
-        cache.delete_hashes(self.config.max_lifetime);
+    fn get_hashes(&self, user: &str) -> AuthResult<(Vec<String>, Vec<String>)> {
+        Ok(self
+            .cache
+            .get_hashes(user, self.config.verify_interval, self.config.max_lifetime))
+    }
 
-        let (mut verified_hashes, mut expired_hashes) = cache.get_hashes(
-            &user.user,
-            self.config.verify_interval,
-            self.config.max_lifetime,
-        );
-
-        if hashlib::get_matching_hash(password, &mut verified_hashes).is_some() {
-            return Ok(());
-        }
-
-        let expired_hash = hashlib::get_matching_hash(password, &mut expired_hashes);
-
-        let res = match self.module.credentials_verify(user, password) {
-            Ok(_) => {
-                let hash =
-                    expired_hash.unwrap_or_else(|| hashlib::hash(password, &self.hash_scheme));
-                cache.insert(&user.user, hash);
-                Ok(())
+    fn insert(&mut self, username: &str, hash: &str) -> AuthResult<()> {
+        match self.cache.get_mut(username) {
+            Some(hashes) => {
+                hashes.insert(hash.to_string(), SystemTime::now());
             }
-            Err(err) => match err {
-                Error::PermFail => {
-                    if let Some(hash) = expired_hash {
-                        cache.delete_hash(&user.user, &hash);
-                    }
-                    Err(err)
-                }
-                _ => {
-                    eprintln!("unable to verify credentials: {err}");
-                    match self.config.allow_expired_on_error {
-                        true => Ok(expired_hash.map(|_| ()).ok_or(err)?),
-                        false => Err(err),
-                    }
-                }
-            },
+            None => {
+                let mut hashes = HashMap::new();
+                hashes.insert(hash.to_string(), SystemTime::now());
+                self.cache.insert(username.to_string(), hashes);
+            }
         };
+        self.cache.changed = true;
+        Ok(())
+    }
 
-        if cache.changed {
+    fn delete(&mut self, user: &str, hash: &str) -> AuthResult<()> {
+        self.cache.delete(user, hash);
+        Ok(())
+    }
+
+    fn cleanup(&mut self) -> AuthResult<()> {
+        self.cache.cleanup(self.config.max_lifetime);
+        Ok(())
+    }
+
+    fn save(&self) {
+        if self.cache.changed {
             match File::options().write(true).open(&self.cache_file) {
                 Ok(file) => {
-                    cache.save_to_file(file).unwrap_or_else(|err| {
+                    self.cache.save_to_file(file).unwrap_or_else(|err| {
                         eprintln!("unable to write cache_file: {err}");
                     });
                 }
@@ -281,7 +283,7 @@ impl CredentialsVerify for FileCacheVerifyModule {
                         if let Ok(metadata) = file.metadata() {
                             metadata.permissions().set_mode(0o600);
                         }
-                        cache.save_to_file(file).unwrap_or_else(|err| {
+                        self.cache.save_to_file(file).unwrap_or_else(|err| {
                             eprintln!("unable to write cache_file: {err}");
                         });
                     }
@@ -289,7 +291,13 @@ impl CredentialsVerify for FileCacheVerifyModule {
                 },
             };
         }
+    }
 
-        res
+    fn module(&mut self) -> &mut Box<dyn CredentialsVerify> {
+        &mut self.module
+    }
+
+    fn allow_expired_on_error(&self) -> bool {
+        self.config.allow_expired_on_error
     }
 }

@@ -11,9 +11,9 @@
 // You should have received a copy of the GNU General Public License
 // along with dovecot-auth.  If not, see <http://www.gnu.org/licenses/>.
 
-use super::{
-    hashlib, AuthResult, CredentialsLookup, CredentialsUpdate, CredentialsVerify, DovecotUser,
-    Error,
+use crate::{
+    hashlib, AuthError, AuthResult, CredentialsLookup, CredentialsUpdate, CredentialsVerify,
+    CredentialsVerifyCache, DovecotUser, InternalVerifyModule,
 };
 
 use mysql::prelude::*;
@@ -22,40 +22,28 @@ use mysql::*;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
-impl From<mysql::Error> for Error {
+impl From<mysql::Error> for AuthError {
     fn from(error: mysql::Error) -> Self {
-        Error::TempFail(error.to_string())
+        AuthError::TempFail(error.to_string())
     }
 }
 
-impl From<mysql::UrlError> for Error {
-    fn from(error: mysql::UrlError) -> Self {
-        Error::TempFail(error.to_string())
-    }
-}
-
-impl From<mysql::FromValueError> for Error {
-    fn from(error: mysql::FromValueError) -> Self {
-        Error::TempFail(error.to_string())
-    }
-}
-
-pub fn get_conn_pool(url: &str) -> AuthResult<Pool> {
+pub fn get_conn_pool(url: &str) -> Result<Pool, mysql::Error> {
     let opts = Opts::from_url(url)?;
     Ok(Pool::new(opts)?)
 }
 
-fn get_user(user: &mut DovecotUser, pool: &Pool, user_query: &str) -> AuthResult<()> {
+fn get_user(user: &mut DovecotUser, pool: &Pool, user_query: &str) -> Result<bool> {
     if user.user.is_empty() {
-        return Err(Error::NoUser);
+        return Ok(false);
     }
 
     let mut conn = pool.get_conn()?;
     let stmt = conn.prep(user_query)?;
 
-    match conn.exec_first(&stmt, params! { "username" => &user.user })? {
-        Some(res) => {
-            let row: Row = res;
+    match conn.exec_first::<Row, _, _>(&stmt, params! { "username" => &user.user })? {
+        Some(row) => {
+            let mut got_any_value = false;
             for column in row.columns_ref() {
                 let column_name = column.name_str();
                 let value = match column_name.as_ref() {
@@ -64,29 +52,30 @@ fn get_user(user: &mut DovecotUser, pool: &Pool, user_query: &str) -> AuthResult
                     }
                     _ => from_value_opt::<String>(row[column_name.as_ref()].clone())?,
                 };
-                match column_name.as_ref() {
-                    "user" => user.user = value,
-                    "password" => user.password = value,
-                    "home" => user.home = Some(value),
-                    "mail" => user.mail = Some(value),
-                    "uid" => user.uid = Some(value),
-                    "gid" => user.gid = Some(value),
-                    "quota_rule" => user.quota_rule = Some(value),
-                    _ => (),
+                if !value.is_empty() {
+                    let mut got_value = true;
+                    match column_name.as_ref() {
+                        "user" => user.user = value,
+                        "password" => user.password = value,
+                        "home" => user.home = Some(value),
+                        "mail" => user.mail = Some(value),
+                        "uid" => user.uid = Some(value),
+                        "gid" => user.gid = Some(value),
+                        "quota_rule" => user.quota_rule = Some(value),
+                        _ => got_value = false,
+                    }
+                    if got_value {
+                        got_any_value = true;
+                    }
                 };
             }
-            Ok(())
+            Ok(got_any_value)
         }
-        None => Err(Error::NoUser),
+        None => Ok(false),
     }
 }
 
-fn update_password(
-    username: &str,
-    password: &str,
-    pool: &Pool,
-    update_query: &str,
-) -> AuthResult<()> {
+fn update_password(username: &str, password: &str, pool: &Pool, update_query: &str) -> Result<()> {
     let mut conn = pool.get_conn()?;
     let stmt = conn.prep(update_query)?;
     Ok(conn.exec_drop(
@@ -100,7 +89,7 @@ fn get_hashes(
     pool: &Pool,
     cache_table: &str,
     max_lifetime: u64,
-) -> AuthResult<Vec<(String, u64)>> {
+) -> Result<Vec<(String, u64)>> {
     let mut conn = pool.get_conn()?;
     let statement = format!(
         concat!("SELECT password, UNIX_TIMESTAMP() - UNIX_TIMESTAMP(last_verified) AS last_verified FROM {} ",
@@ -120,7 +109,7 @@ fn get_hashes(
     Ok(hash_list)
 }
 
-fn save_hash(username: &str, password: &str, pool: &Pool, cache_table: &str) -> AuthResult<()> {
+fn save_hash(username: &str, password: &str, pool: &Pool, cache_table: &str) -> Result<()> {
     let mut conn = pool.get_conn()?;
     let statement = format!(
         concat!(
@@ -136,7 +125,7 @@ fn save_hash(username: &str, password: &str, pool: &Pool, cache_table: &str) -> 
     )?)
 }
 
-fn delete_hash(username: &str, password: &str, pool: &Pool, cache_table: &str) -> AuthResult<()> {
+fn delete_hash(username: &str, password: &str, pool: &Pool, cache_table: &str) -> Result<()> {
     let mut conn = pool.get_conn()?;
     let statement = format!(
         "DELETE FROM {} WHERE username = :username AND password = :password",
@@ -149,7 +138,7 @@ fn delete_hash(username: &str, password: &str, pool: &Pool, cache_table: &str) -
     )?)
 }
 
-fn delete_dead_hashes(max_lifetime: u64, pool: &Pool, cache_table: &str) -> AuthResult<()> {
+fn delete_dead_hashes(max_lifetime: u64, pool: &Pool, cache_table: &str) -> Result<()> {
     let mut conn = pool.get_conn()?;
     let statement = format!(
         "DELETE FROM {} WHERE UNIX_TIMESTAMP() - UNIX_TIMESTAMP(last_verified) > :max_lifetime",
@@ -187,8 +176,8 @@ impl DBLookupModule {
 }
 
 impl CredentialsLookup for DBLookupModule {
-    fn credentials_lookup(&self, user: &mut DovecotUser) -> AuthResult<()> {
-        get_user(user, &self.conn_pool, &self.config.user_query)
+    fn credentials_lookup(&mut self, user: &mut DovecotUser) -> AuthResult<bool> {
+        Ok(get_user(user, &self.conn_pool, &self.config.user_query)?)
     }
 }
 
@@ -243,76 +232,69 @@ impl DBCacheVerifyModule {
     }
 }
 
-impl CredentialsVerify for DBCacheVerifyModule {
-    fn credentials_verify(&self, user: &DovecotUser, password: &str) -> AuthResult<()> {
+impl CredentialsVerifyCache for DBCacheVerifyModule {
+    fn hash(&self, password: &str) -> String {
+        hashlib::hash(password, &self.hash_scheme)
+    }
+
+    fn get_hashes(&self, user: &str) -> AuthResult<(Vec<String>, Vec<String>)> {
+        let hashes = get_hashes(
+            user,
+            &self.conn_pool,
+            &self.config.db_table,
+            self.config.max_lifetime,
+        )?;
+
+        let mut verified_hashes: Vec<String> = Vec::new();
+        let mut expired_hashes: Vec<String> = Vec::new();
+
+        for (hash, last_verify) in hashes {
+            if last_verify <= self.config.verify_interval {
+                verified_hashes.push(hash);
+            } else {
+                expired_hashes.push(hash);
+            }
+        }
+        Ok((verified_hashes, expired_hashes))
+    }
+
+    fn insert(&mut self, user: &str, hash: &str) -> AuthResult<()> {
+        Ok(save_hash(
+            user,
+            hash,
+            &self.conn_pool,
+            &self.config.db_table,
+        )?)
+    }
+
+    fn delete(&mut self, user: &str, hash: &str) -> AuthResult<()> {
+        Ok(delete_hash(
+            user,
+            hash,
+            &self.conn_pool,
+            &self.config.db_table,
+        )?)
+    }
+
+    fn cleanup(&mut self) -> AuthResult<()> {
         if self.config.cleanup {
             delete_dead_hashes(
                 self.config.max_lifetime,
                 &self.conn_pool,
                 &self.config.db_table,
-            )
-            .unwrap_or_else(|err| {
-                eprintln!("unable to cleanup cache: {err}");
-            });
+            )?;
         }
-        let mut verified_hashes: Vec<String> = Vec::new();
-        let mut expired_hashes: Vec<String> = Vec::new();
-        let mut expired_hash = None;
+        Ok(())
+    }
 
-        match get_hashes(
-            &user.user,
-            &self.conn_pool,
-            &self.config.db_table,
-            self.config.max_lifetime,
-        ) {
-            Ok(hashes) => {
-                for (hash, last_verify) in hashes {
-                    if last_verify <= self.config.verify_interval {
-                        verified_hashes.push(hash);
-                    } else if last_verify <= self.config.max_lifetime {
-                        expired_hashes.push(hash);
-                    }
-                }
+    fn save(&self) {}
 
-                if hashlib::get_matching_hash(password, &mut verified_hashes).is_some() {
-                    return Ok(());
-                }
+    fn module(&mut self) -> &mut Box<dyn CredentialsVerify> {
+        &mut self.module
+    }
 
-                expired_hash = hashlib::get_matching_hash(password, &mut expired_hashes);
-            }
-            Err(err) => {
-                eprintln!("unable to read hashes from cache: {err}");
-            }
-        }
-
-        match self.module.credentials_verify(user, password) {
-            Ok(_) => {
-                let hash = expired_hash.unwrap_or(hashlib::hash(password, &self.hash_scheme));
-                save_hash(&user.user, &hash, &self.conn_pool, &self.config.db_table)
-                    .unwrap_or_else(|err| {
-                        eprintln!("unable to save hash to cache: {err}");
-                    });
-                Ok(())
-            }
-            Err(err) => match err {
-                Error::PermFail => {
-                    if let Some(hash) = expired_hash {
-                        delete_hash(&user.user, &hash, &self.conn_pool, &self.config.db_table)
-                            .unwrap_or_else(|err| {
-                                eprintln!("unable to delete expired hash: {err}")
-                            });
-                    }
-                    Err(err)
-                }
-                _ => {
-                    eprintln!("unable to verify credentials: {err}");
-                    match self.config.allow_expired_on_error {
-                        true => Ok(expired_hash.map(|_| ()).ok_or(err)?),
-                        false => Err(err),
-                    }
-                }
-            },
-        }
+    fn allow_expired_on_error(&self) -> bool {
+        self.config.allow_expired_on_error
     }
 }
 
@@ -350,17 +332,21 @@ impl CredentialsUpdate for DBUpdateCredentialsModule {
     fn update_credentials(&self, user: &DovecotUser, password: &str) -> AuthResult<()> {
         if !self.config.update_password_query.is_empty() {
             let hash_prefix: String = format!("{{{}}}", &self.config.hash_scheme.as_str());
-            let verifier = super::InternalVerifyModule {};
-            if !user.password.starts_with(&hash_prefix)
-                && verifier.credentials_verify(user, password).is_ok()
-            {
-                let hash = hashlib::hash(password, &self.config.hash_scheme);
-                update_password(
-                    &user.user,
-                    &hash,
-                    &self.conn_pool,
-                    &self.config.update_password_query,
-                )?;
+            if user.password.starts_with(&hash_prefix) {
+                return Ok(());
+            }
+
+            match InternalVerifyModule::new().credentials_verify(user, password) {
+                Ok(true) => {
+                    let hash = hashlib::hash(password, &self.config.hash_scheme);
+                    update_password(
+                        &user.user,
+                        &hash,
+                        &self.conn_pool,
+                        &self.config.update_password_query,
+                    )?;
+                }
+                _ => {}
             }
         }
         Ok(())

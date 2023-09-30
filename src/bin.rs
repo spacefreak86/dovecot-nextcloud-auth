@@ -21,7 +21,7 @@ use dovecot_auth::modules::http::*;
 use dovecot_auth::modules::{
     CredentialsLookup, CredentialsUpdate, CredentialsVerify, InternalVerifyModule,
 };
-use dovecot_auth::{authenticate, AuthResult, Error, ReplyBin, RC_TEMPFAIL};
+use dovecot_auth::{authenticate, AuthError, AuthResult, ReplyBin, RC_TEMPFAIL};
 
 use clap::Parser;
 use serde::{Deserialize, Serialize};
@@ -293,8 +293,8 @@ fn main() {
     };
 
     let rc = match authenticate(
-        &lookup_mod,
-        &verify_mod,
+        &mut lookup_mod,
+        &mut verify_mod,
         &update_mod,
         &config.allow_internal_verify_hosts,
         &reply_bin,
@@ -303,12 +303,12 @@ fn main() {
         Ok(_) => 0,
         Err(err) => {
             match &err {
-                Error::PermFail | Error::NoUser => {
+                AuthError::PermFail | AuthError::NoUser => {
                     if args.test {
                         eprintln!("{err}");
                     }
                 }
-                Error::TempFail(msg) => {
+                AuthError::TempFail(msg) => {
                     eprintln!("{msg}");
                 }
             }

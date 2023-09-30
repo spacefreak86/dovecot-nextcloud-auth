@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License
 // along with dovecot-auth.  If not, see <http://www.gnu.org/licenses/>.
 
-use super::{AuthResult, CredentialsVerify, DovecotUser, Error};
+use crate::{AuthError, AuthResult, CredentialsVerify, DovecotUser};
 
 use base64::{engine::general_purpose, Engine as _};
 use urlencoding::encode;
@@ -51,7 +51,7 @@ impl HttpVerifyModule {
 }
 
 impl CredentialsVerify for HttpVerifyModule {
-    fn credentials_verify(&self, user: &DovecotUser, password: &str) -> AuthResult<()> {
+    fn credentials_verify(&mut self, user: &DovecotUser, password: &str) -> AuthResult<bool> {
         let username = encode(&user.user);
         let url = self.config.url.replace("::USERNAME::", &username);
 
@@ -64,9 +64,9 @@ impl CredentialsVerify for HttpVerifyModule {
             Ok(res) => {
                 let code = res.status();
                 if code == self.config.ok_code {
-                    Ok(())
+                    Ok(true)
                 } else {
-                    Err(Error::TempFail(format!(
+                    Err(AuthError::TempFail(format!(
                         "unexpected http response: {code} {}",
                         res.status_text()
                     )))
@@ -74,15 +74,17 @@ impl CredentialsVerify for HttpVerifyModule {
             }
             Err(ureq::Error::Status(code, res)) => {
                 if code == self.config.invalid_code {
-                    Err(Error::PermFail)
+                    Ok(false)
                 } else {
-                    Err(Error::TempFail(format!(
+                    Err(AuthError::TempFail(format!(
                         "unexpected http error response: {code} {}",
                         res.status_text()
                     )))
                 }
             }
-            Err(err) => Err(Error::TempFail(format!("unable to reach server: {err}"))),
+            Err(err) => Err(AuthError::TempFail(format!(
+                "unable to reach server: {err}"
+            ))),
         }
     }
 }

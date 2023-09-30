@@ -23,7 +23,8 @@ use std::fs::File;
 use std::io::Read;
 use std::os::unix::io::FromRawFd;
 
-use modules::{CredentialsLookup, CredentialsUpdate, CredentialsVerify, InternalVerifyModule};
+pub use modules::{CredentialsLookup, CredentialsUpdate, CredentialsVerify, CredentialsVerifyCache};
+use modules::InternalVerifyModule;
 
 pub const RC_PERMFAIL: i32 = 1;
 pub const RC_NOUSER: i32 = 3;
@@ -32,25 +33,25 @@ pub const RC_TEMPFAIL: i32 = 111;
 pub const INPUT_FD: i32 = 3;
 
 #[derive(Debug, Clone)]
-pub enum Error {
+pub enum AuthError {
     PermFail,
     NoUser,
     TempFail(String),
 }
 
-impl std::fmt::Display for Error {
+impl std::fmt::Display for AuthError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            Error::PermFail => write!(f, "invalid credentials"),
-            Error::NoUser => write!(f, "user not found"),
-            Error::TempFail(msg) => write!(f, "{}", msg),
+            AuthError::PermFail => write!(f, "invalid credentials"),
+            AuthError::NoUser => write!(f, "user not found"),
+            AuthError::TempFail(msg) => write!(f, "{}", msg),
         }
     }
 }
 
-impl std::error::Error for Error {}
+impl std::error::Error for AuthError {}
 
-impl Error {
+impl AuthError {
     pub fn exit_code(&self) -> i32 {
         match self {
             Self::PermFail => RC_PERMFAIL,
@@ -60,20 +61,20 @@ impl Error {
     }
 }
 
-impl From<std::io::Error> for Error {
+impl From<std::io::Error> for AuthError {
     fn from(error: std::io::Error) -> Self {
-        Error::TempFail(error.to_string())
+        AuthError::TempFail(error.to_string())
     }
 }
 
 #[cfg(feature = "serde")]
-impl From<toml::de::Error> for Error {
+impl From<toml::de::Error> for AuthError {
     fn from(value: toml::de::Error) -> Self {
-        Error::TempFail(value.to_string())
+        AuthError::TempFail(value.to_string())
     }
 }
 
-pub type AuthResult<T> = Result<T, Error>;
+pub type AuthResult<T> = Result<T, AuthError>;
 
 #[derive(Debug, Clone, Default)]
 pub struct DovecotUser {
@@ -141,7 +142,7 @@ fn read_credentials_from_fd(fd: Option<i32>) -> AuthResult<(String, String)> {
     if credentials.len() >= 2 {
         Ok((credentials[0].to_string(), credentials[1].to_string()))
     } else {
-        Err(Error::TempFail(format!(
+        Err(AuthError::TempFail(format!(
             "did not receive credentials on fd {fd}"
         )))
     }
@@ -178,8 +179,8 @@ impl ReplyBin {
 }
 
 pub fn authenticate(
-    lookup_mod: &Option<Box<dyn CredentialsLookup>>,
-    verify_mod: &Option<Box<dyn CredentialsVerify>>,
+    lookup_mod: &mut Option<Box<dyn CredentialsLookup>>,
+    verify_mod: &mut Option<Box<dyn CredentialsVerify>>,
     update_mod: &Option<Box<dyn CredentialsUpdate>>,
     allow_internal_verify_hosts: &Option<Vec<String>>,
     reply_bin: &ReplyBin,
@@ -189,28 +190,21 @@ pub fn authenticate(
     let mut user = DovecotUser::new(username);
 
     if env::var("CREDENTIALS_LOOKUP").unwrap_or_default() == "1" {
-        match lookup_mod {
+        match lookup_mod.as_mut() {
             Some(module) => {
-                module.credentials_lookup(&mut user)?;
+                if !module.credentials_lookup(&mut user)? {
+                    return Err(AuthError::NoUser);
+                }
                 if env::var("AUTHORIZED").unwrap_or_default() == "1" {
                     env::set_var("AUTHORIZED", "2");
                 }
             }
             None => {
-                return Err(Error::NoUser);
+                return Err(AuthError::NoUser);
             }
         }
     } else {
-        if let Some(module) = lookup_mod {
-            if module.credentials_lookup(&mut user).is_ok() {
-                if let Some(module) = update_mod {
-                    module.update_credentials(&user, &password)?;
-                }
-            }
-        }
-
         let mut internal_verified = false;
-
         if let Some(allowed) = allow_internal_verify_hosts {
             if let Ok(remote_ip) = env::var("REMOTE_IP") {
                 if !remote_ip.is_empty()
@@ -224,13 +218,31 @@ pub fn authenticate(
             }
         }
 
-        if !internal_verified {
+        if internal_verified {
+            if let Some(module) = lookup_mod {
+                match module.credentials_lookup(&mut user) {
+                    Ok(true) => {
+                        if let Some(module) = update_mod {
+                            if let Err(err) = module.update_credentials(&user, &password) {
+                                eprintln!("unable to update credentials: {err}");
+                            }
+                        }
+                    }
+                    Ok(false) => {}
+                    Err(err) => {
+                        eprintln!("error during credentials_lookup: {err}");
+                    }
+                }
+            }
+        } else {
             match verify_mod {
                 Some(module) => {
-                    module.credentials_verify(&user, &password)?;
+                    if !module.credentials_verify(&user, &password)? {
+                        return Err(AuthError::PermFail);
+                    }
                 }
                 None => {
-                    return Err(Error::TempFail(
+                    return Err(AuthError::TempFail(
                         "unable to verify credentials, very module not loaded".to_string(),
                     ));
                 }
@@ -240,5 +252,5 @@ pub fn authenticate(
 
     reply_bin
         .call(&user)
-        .map_err(|err| Error::TempFail(format!("unable to call reply_bin: {err}")))
+        .map_err(|err| AuthError::TempFail(format!("unable to call reply_bin: {err}")))
 }
