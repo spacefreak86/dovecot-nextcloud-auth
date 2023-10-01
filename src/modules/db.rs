@@ -331,23 +331,28 @@ impl DBUpdateCredentialsModule {
 }
 
 impl CredentialsUpdate for DBUpdateCredentialsModule {
-    fn update_credentials(&self, user: &DovecotUser, password: &str) -> AuthResult<()> {
+    fn update_credentials(&self, user: &DovecotUser, password: &str) -> AuthResult<bool> {
         if !self.config.update_password_query.is_empty() {
-            let hash_prefix: String = format!("{{{}}}", &self.config.hash_scheme.as_str());
-            if user.password.starts_with(&hash_prefix) {
-                return Ok(());
-            }
-
-            if InternalVerifyModule::new().credentials_verify(user, password)? {
-                let hash = hashlib::hash(password, &self.config.hash_scheme);
-                update_password(
-                    &user.user,
-                    &hash,
-                    &self.conn_pool,
-                    &self.config.update_password_query,
-                )?;
-            }
+            return Ok(false);
         }
-        Ok(())
+
+        let hash_prefix: String = format!("{{{}}}", &self.config.hash_scheme.as_str());
+        if user.password.starts_with(&hash_prefix) {
+            return Ok(false);
+        }
+
+        if !InternalVerifyModule::new().credentials_verify(user, password)? {
+            return Ok(false);
+        }
+
+        let hash = hashlib::hash(password, &self.config.hash_scheme);
+        update_password(
+            &user.user,
+            &hash,
+            &self.conn_pool,
+            &self.config.update_password_query,
+        )?;
+
+        Ok(true)
     }
 }

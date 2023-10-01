@@ -22,7 +22,7 @@ pub mod file;
 
 use crate::{hashlib, AuthResult, DovecotUser};
 
-use log::warn;
+use log::{debug, warn};
 
 pub trait CredentialsLookup {
     fn credentials_lookup(&mut self, user: &mut DovecotUser) -> AuthResult<bool>;
@@ -33,7 +33,7 @@ pub trait CredentialsVerify {
 }
 
 pub trait CredentialsUpdate {
-    fn update_credentials(&self, user: &DovecotUser, password: &str) -> AuthResult<()>;
+    fn update_credentials(&self, user: &DovecotUser, password: &str) -> AuthResult<bool>;
 }
 
 pub trait CredentialsVerifyCache: CredentialsVerify {
@@ -50,6 +50,7 @@ pub trait CredentialsVerifyCache: CredentialsVerify {
         user: &DovecotUser,
         password: &str,
     ) -> AuthResult<bool> {
+        debug!("cached credentials verify for {}", user.user);
         self.cleanup().unwrap_or_else(|err| {
             warn!("unable to cleanup cache: {err}");
         });
@@ -59,13 +60,16 @@ pub trait CredentialsVerifyCache: CredentialsVerify {
                 warn!("unable to get hashes from cache: {err}");
                 Default::default()
             });
+        debug!("try to verify credentials against cached hashes");
         if hashlib::find_hash(password, &mut verified_hashes).is_some() {
             return Ok(true);
         }
 
         let expired_hash = hashlib::find_hash(password, &mut expired_hashes);
+        debug!("verify credentials with verification module");
         let res = match self.module().credentials_verify(user, password) {
             Ok(true) => {
+                debug!("verification succeeded, insert hash into cache");
                 let hash = expired_hash.unwrap_or_else(|| self.hash(password));
                 self.insert(&user.user, &hash).unwrap_or_else(|err| {
                     warn!("unable to insert hash into cache: {err}");
@@ -81,13 +85,26 @@ pub trait CredentialsVerifyCache: CredentialsVerify {
                 Ok(false)
             }
             Err(err) => match self.allow_expired_on_error() {
-                true => Ok(expired_hash.is_some()),
+                true => {
+                    warn!("verification module failed: {err}");
+                    warn!("try to verify against expired hashes");
+                    match expired_hash {
+                        Some(_) => {
+                            debug!("verification against expired hashes succeeded");
+                            Ok(true)
+                        }
+                        None => {
+                            debug!("verification against expired hashes failed");
+                            Ok(false)
+                        }
+                    }
+                }
                 false => Err(err),
             },
         };
 
         if let Err(err) = self.save() {
-            warn!("unable to save cache: {err}");
+            warn!("unable to save verify cache: {err}");
         }
 
         res

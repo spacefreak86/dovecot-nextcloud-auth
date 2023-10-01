@@ -14,7 +14,7 @@
 pub mod hashlib;
 pub mod modules;
 
-use log::warn;
+use log::{debug, info, warn};
 use nix::unistd::execvp;
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -193,11 +193,13 @@ pub fn authenticate(
     let mut user = DovecotUser::new(username);
 
     if env::var("CREDENTIALS_LOOKUP").unwrap_or_default() == "1" {
+        debug!("lookup credentials of user {}", user.user);
         match lookup_mod.as_mut() {
             Some(module) => {
                 if !module.credentials_lookup(&mut user)? {
                     return Err(AuthError::NoUser);
                 }
+                debug!("got user data: {:?}", user);
                 if env::var("AUTHORIZED").unwrap_or_default() == "1" {
                     env::set_var("AUTHORIZED", "2");
                 }
@@ -207,30 +209,45 @@ pub fn authenticate(
             }
         }
     } else {
+        debug!("verify credentials of user {}", user.user);
+
         let mut internal_verified = false;
 
         if let Some(module) = lookup_mod {
+            debug!("lookup up user data");
             match module.credentials_lookup(&mut user) {
                 Ok(true) => {
+                    debug!("got user data: {:?}", user);
+
                     if let Some(module) = update_mod {
-                        if let Err(err) = module.update_credentials(&user, &password) {
-                            warn!("unable to update credentials: {err}");
+                        match module.update_credentials(&user, &password) {
+                            Ok(true) => debug!("successfully updated credentials"),
+                            Ok(false) => debug!("credentials where not updated"),
+                            Err(err) => warn!("unable to update credentials: {err}"),
                         }
                     }
 
                     if let Some(allowed) = allow_internal_verify_hosts {
+                        debug!("allowed for internal verification: {:?}", allowed);
                         if let Ok(remote_ip) = env::var("REMOTE_IP") {
-                            if !remote_ip.is_empty()
-                                && allowed.contains(&remote_ip)
-                                && InternalVerifyModule::new()
+                            debug!("got env variable REMOTE_IP={remote_ip}");
+                            if !remote_ip.is_empty() && allowed.contains(&remote_ip) {
+                                debug!("try internally verificate user credentials");
+                                if InternalVerifyModule::new()
                                     .credentials_verify(&user, &password)?
-                            {
-                                internal_verified = true;
+                                {
+                                    info!("internal verification succeeded");
+                                    internal_verified = true;
+                                } else {
+                                    debug!("internal verification failed");
+                                }
                             }
                         }
                     }
                 }
-                Ok(false) => {}
+                Ok(false) => {
+                    debug!("no user data found");
+                }
                 Err(err) => {
                     warn!("error during credentials_lookup: {err}");
                 }
@@ -243,6 +260,7 @@ pub fn authenticate(
                     if !module.credentials_verify(&user, &password)? {
                         return Err(AuthError::PermFail);
                     }
+                    info!("verification succeeded");
                 }
                 None => {
                     return Err(AuthError::TempFail(
