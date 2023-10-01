@@ -336,7 +336,7 @@ impl CredentialsUpdate for DBUpdateCredentialsModule {
             return Ok(false);
         }
 
-        let hash_prefix: String = format!("{{{}}}", &self.config.hash_scheme.as_str());
+        let hash_prefix: String = format!("{{{}}}", &self.config.hash_scheme.to_string());
         if user.password.starts_with(&hash_prefix) {
             return Ok(false);
         }

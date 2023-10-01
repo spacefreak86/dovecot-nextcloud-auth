@@ -25,16 +25,15 @@ use dovecot_auth::{authenticate, AuthError, AuthResult, ReplyBin, RC_TEMPFAIL};
 
 use clap::Parser;
 use clap_verbosity_flag::{Verbosity, WarnLevel};
+use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs::File;
 use std::io::prelude::*;
 use std::path::Path;
 use std::time::SystemTime;
-use log::{error, info, warn};
 
 const MYNAME: &str = clap::crate_name!();
-const DEFAULT_CONFIG_CACHE_FILE: &str = "/tmp/dovecot-auth-config.cache";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -69,7 +68,6 @@ pub enum UpdateCredentialsModule {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     configured: bool,
-    config_cache_file: Option<String>,
     #[cfg(feature = "db")]
     db_url: Option<String>,
     lookup_module: Option<LookupModule>,
@@ -106,7 +104,6 @@ impl Default for Config {
 
         Self {
             configured: false,
-            config_cache_file: Some(String::from(DEFAULT_CONFIG_CACHE_FILE)),
             #[cfg(feature = "db")]
             db_url: Some(String::from("mysql://DBUSER:DBPASS@localhost:3306/postfix")),
             lookup_module,
@@ -137,7 +134,7 @@ struct Args {
         help = "read credentials from stdin instead of file descriptor 3"
     )]
     test: bool,
-    #[arg(short, default_value_t = false, help = "print example config")]
+    #[arg(short, long, default_value_t = false, help = "print example config")]
     print_example_config: bool,
     #[arg(default_value_t = String::from("/bin/true"))]
     reply_bin: String,
@@ -149,9 +146,11 @@ struct Args {
 
 fn parse_config_file(mut config_file: File, cache_file: Option<File>) -> AuthResult<Config> {
     let mut content = String::new();
+    debug!("parse config file {:?}", config_file);
     config_file.read_to_string(&mut content)?;
     let config: Config = toml::from_str(&content)?;
     if let Some(file) = cache_file {
+        debug!("save config to cache file {:?}", file);
         config.save_to_file(file).unwrap_or_else(|err| {
             warn!("unable to write config cache file: {err}");
         });
@@ -169,19 +168,48 @@ where
     C: AsRef<Path>,
 {
     let config_file = File::open(config_path)?;
-    let mut opt_cache_file = cache_path.map(|path| File::open(path).ok()).flatten();
+    let mut opt_cache_file = cache_path
+        .as_ref()
+        .map(|path| File::options().read(true).write(true).open(path).ok())
+        .flatten();
 
     let config = match opt_cache_file.take() {
         Some(cache_file) => {
+            debug!("got config cache file {:?}, determining age", cache_file);
             let cache_modified = get_modified(&cache_file).unwrap_or(SystemTime::UNIX_EPOCH);
             let config_modified = get_modified(&config_file).unwrap_or(SystemTime::now());
+            debug!("config file last modified: {:?}", config_modified);
+            debug!("cache file last modified: {:?}", cache_modified);
             match config_modified.duration_since(cache_modified) {
-                Ok(_) => parse_config_file(config_file, opt_cache_file)?,
-                Err(_) => Config::load_from_file(cache_file)
-                    .unwrap_or(parse_config_file(config_file, opt_cache_file)?),
+                Ok(duration) => {
+                    debug!(
+                        "cache file is {} older thand conf file, refresh",
+                        duration.as_secs()
+                    );
+                    parse_config_file(config_file, Some(cache_file))?
+                }
+                Err(_) => match Config::load_from_file(&cache_file) {
+                    Ok(config) => config,
+                    Err(err) => {
+                        debug!("unable to load config cache file: {err}");
+                        parse_config_file(config_file, Some(cache_file))?
+                    }
+                },
             }
         }
-        None => parse_config_file(config_file, opt_cache_file)?,
+        None => {
+            let cache_file = match cache_path {
+                Some(path) => match File::create(path) {
+                    Ok(file) => Some(file),
+                    Err(err) => {
+                        warn!("unable to create config cache file: {err}");
+                        None
+                    }
+                },
+                None => None,
+            };
+            parse_config_file(config_file, cache_file)?
+        }
     };
     Ok(config)
 }

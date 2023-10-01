@@ -140,7 +140,6 @@ fn read_credentials_from_fd(fd: Option<i32>) -> AuthResult<(String, String)> {
     let mut f = unsafe { File::from_raw_fd(fd) };
     let mut input = String::new();
     f.read_to_string(&mut input)?;
-
     let credentials: Vec<&str> = input.split('\0').collect();
     if credentials.len() >= 2 {
         Ok((credentials[0].to_string(), credentials[1].to_string()))

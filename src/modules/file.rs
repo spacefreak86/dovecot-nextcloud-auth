@@ -20,6 +20,7 @@ use log::{debug, warn};
 
 use std::collections::HashMap;
 use std::fs::File;
+use std::io::Seek;
 use std::os::unix::fs::PermissionsExt;
 use std::time::SystemTime;
 
@@ -29,11 +30,11 @@ pub trait BinaryCacheFile
 where
     Self: Serialize + DeserializeOwned,
 {
-    fn load_from_file(file: File) -> AuthResult<Self> {
+    fn load_from_file(file: &File) -> AuthResult<Self> {
         debug!("trying to get shared lock on file {:?}", file);
         file.lock_shared()?;
         debug!("read and deserialize data");
-        let instance: Self = bincode::deserialize_from(&file)
+        let instance: Self = bincode::deserialize_from(file)
             .map_err(|err| AuthError::TempFail(err.to_string()))?;
         debug!("unlock file");
         file.unlock()?;
@@ -43,6 +44,7 @@ where
     fn save_to_file(&self, mut file: File) -> AuthResult<()> {
         debug!("trying to get exclusive lock on file {:?}", file);
         file.lock_exclusive()?;
+        file.seek(std::io::SeekFrom::Start(0))?;
         file.set_len(0)?;
         debug!("serialize and write data");
         bincode::serialize_into(&mut file, self)
@@ -101,7 +103,7 @@ impl FileCacheVerifyModule {
             .unwrap_or(DEFAULT_VERIFY_CACHE_FILE.to_string());
         let cache = match File::open(&cache_file) {
             Ok(file) => {
-                Cache::load_from_file(file).unwrap_or_else(|err| {
+                Cache::load_from_file(&file).unwrap_or_else(|err| {
                     warn!("unable to deserialize cache: {err}");
                     Default::default()
                 })
