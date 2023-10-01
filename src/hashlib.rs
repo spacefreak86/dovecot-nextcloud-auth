@@ -93,7 +93,7 @@ pub fn verify_hash(password: &str, hash: &str) -> bool {
     hash == hash1
 }
 
-pub fn get_matching_hash<H: AsRef<str>>(password: &str, hash_list: &mut Vec<H>) -> Option<H> {
+pub fn find_hash<H: AsRef<str>>(password: &str, hash_list: &mut Vec<H>) -> Option<H> {
     if let Some(index) = hash_list
         .iter()
         .position(|hash| verify_hash(password, hash.as_ref()))
@@ -105,7 +105,7 @@ pub fn get_matching_hash<H: AsRef<str>>(password: &str, hash_list: &mut Vec<H>) 
 
 #[cfg(test)]
 mod tests {
-    use crate::hashlib::{get_matching_hash, hash, verify_hash, Scheme};
+    use crate::hashlib::{find_hash, hash, verify_hash, Scheme};
 
     const TEST_PASSWORD: &'static str = "TestPass ä?=%*@+-ç£{}()!#\"'~`";
 
@@ -132,16 +132,16 @@ mod tests {
             hash("AndAnotherTestPassword", &Scheme::SHA512),
         ];
         assert_eq!(
-            get_matching_hash(TEST_PASSWORD, &mut hashes),
+            find_hash(TEST_PASSWORD, &mut hashes),
             Some(ssha512_hash)
         );
-        assert_eq!(get_matching_hash(TEST_PASSWORD, &mut hashes), None);
+        assert_eq!(find_hash(TEST_PASSWORD, &mut hashes), None);
 
         hashes.push(sha512_hash.clone());
         assert_eq!(
-            get_matching_hash(TEST_PASSWORD, &mut hashes),
+            find_hash(TEST_PASSWORD, &mut hashes),
             Some(sha512_hash)
         );
-        assert_eq!(get_matching_hash(TEST_PASSWORD, &mut hashes), None);
+        assert_eq!(find_hash(TEST_PASSWORD, &mut hashes), None);
     }
 }

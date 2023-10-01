@@ -57,11 +57,11 @@ pub trait CredentialsVerifyCache: CredentialsVerify {
                 eprintln!("unable to get hashes from cache: {err}");
                 Default::default()
             });
-        if hashlib::get_matching_hash(password, &mut verified_hashes).is_some() {
+        if hashlib::find_hash(password, &mut verified_hashes).is_some() {
             return Ok(true);
         }
 
-        let expired_hash = hashlib::get_matching_hash(password, &mut expired_hashes);
+        let expired_hash = hashlib::find_hash(password, &mut expired_hashes);
         let res = match self.module().credentials_verify(user, password) {
             Ok(true) => {
                 let hash = expired_hash.unwrap_or_else(|| self.hash(password));

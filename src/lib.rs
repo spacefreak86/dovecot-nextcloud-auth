@@ -210,8 +210,7 @@ pub fn authenticate(
                 if !remote_ip.is_empty()
                     && allowed.contains(&remote_ip)
                     && InternalVerifyModule::new()
-                        .credentials_verify(&user, &password)
-                        .is_ok()
+                        .credentials_verify(&user, &password)?
                 {
                     internal_verified = true;
                 }
