@@ -50,7 +50,7 @@ pub trait CredentialsVerifyCache: CredentialsVerify {
         user: &DovecotUser,
         password: &str,
     ) -> AuthResult<bool> {
-        debug!("cached credentials verify for {}", user.user);
+        debug!("verify credentials (cached)");
         self.cleanup().unwrap_or_else(|err| {
             warn!("unable to cleanup cache: {err}");
         });
@@ -60,8 +60,10 @@ pub trait CredentialsVerifyCache: CredentialsVerify {
                 warn!("unable to get hashes from cache: {err}");
                 Default::default()
             });
-        debug!("try to verify credentials against cached hashes");
+        debug!("verified hashes: {:?}", verified_hashes);
+        debug!("try to verify credentials against cached verified hashes");
         if hashlib::find_hash(password, &mut verified_hashes).is_some() {
+            debug!("verified against cached verified hash successfully");
             return Ok(true);
         }
 
