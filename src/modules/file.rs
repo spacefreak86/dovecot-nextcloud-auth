@@ -16,6 +16,7 @@ use crate::{hashlib, AuthError, AuthResult, CredentialsVerify, CredentialsVerify
 use bincode;
 use fs2::FileExt;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use log::warn;
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -31,7 +32,7 @@ where
     fn load_from_file(file: File) -> AuthResult<Self> {
         file.lock_shared()?;
         let instance: Self = bincode::deserialize_from(&file)
-            .map_err(|err| AuthError::TempFail(format!("unable to deserialize: {err}",)))?;
+            .map_err(|err| AuthError::TempFail(err.to_string()))?;
         file.unlock()?;
         Ok(instance)
     }
@@ -97,7 +98,7 @@ impl FileCacheVerifyModule {
             .as_ref()
             .map(|path| match File::open(path) {
                 Ok(file) => Cache::load_from_file(file).unwrap_or_else(|err| {
-                    eprintln!("unable to deserialize cache: {err}");
+                    warn!("unable to deserialize cache: {err}");
                     Default::default()
                 }),
                 Err(_) => Default::default(),

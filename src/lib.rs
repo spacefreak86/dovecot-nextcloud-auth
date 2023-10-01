@@ -14,6 +14,7 @@
 pub mod hashlib;
 pub mod modules;
 
+use log::warn;
 use nix::unistd::execvp;
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -23,8 +24,10 @@ use std::fs::File;
 use std::io::Read;
 use std::os::unix::io::FromRawFd;
 
-pub use modules::{CredentialsLookup, CredentialsUpdate, CredentialsVerify, CredentialsVerifyCache};
 use modules::InternalVerifyModule;
+pub use modules::{
+    CredentialsLookup, CredentialsUpdate, CredentialsVerify, CredentialsVerifyCache,
+};
 
 pub const RC_PERMFAIL: i32 = 1;
 pub const RC_NOUSER: i32 = 3;
@@ -205,35 +208,36 @@ pub fn authenticate(
         }
     } else {
         let mut internal_verified = false;
-        if let Some(allowed) = allow_internal_verify_hosts {
-            if let Ok(remote_ip) = env::var("REMOTE_IP") {
-                if !remote_ip.is_empty()
-                    && allowed.contains(&remote_ip)
-                    && InternalVerifyModule::new()
-                        .credentials_verify(&user, &password)?
-                {
-                    internal_verified = true;
+
+        if let Some(module) = lookup_mod {
+            match module.credentials_lookup(&mut user) {
+                Ok(true) => {
+                    if let Some(module) = update_mod {
+                        if let Err(err) = module.update_credentials(&user, &password) {
+                            warn!("unable to update credentials: {err}");
+                        }
+                    }
+
+                    if let Some(allowed) = allow_internal_verify_hosts {
+                        if let Ok(remote_ip) = env::var("REMOTE_IP") {
+                            if !remote_ip.is_empty()
+                                && allowed.contains(&remote_ip)
+                                && InternalVerifyModule::new()
+                                    .credentials_verify(&user, &password)?
+                            {
+                                internal_verified = true;
+                            }
+                        }
+                    }
+                }
+                Ok(false) => {}
+                Err(err) => {
+                    warn!("error during credentials_lookup: {err}");
                 }
             }
         }
 
-        if internal_verified {
-            if let Some(module) = lookup_mod {
-                match module.credentials_lookup(&mut user) {
-                    Ok(true) => {
-                        if let Some(module) = update_mod {
-                            if let Err(err) = module.update_credentials(&user, &password) {
-                                eprintln!("unable to update credentials: {err}");
-                            }
-                        }
-                    }
-                    Ok(false) => {}
-                    Err(err) => {
-                        eprintln!("error during credentials_lookup: {err}");
-                    }
-                }
-            }
-        } else {
+        if !internal_verified {
             match verify_mod {
                 Some(module) => {
                     if !module.credentials_verify(&user, &password)? {

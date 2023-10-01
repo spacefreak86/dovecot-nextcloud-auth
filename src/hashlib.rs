@@ -15,6 +15,7 @@ use base64::{engine::general_purpose, Engine as _};
 use rand::distributions::Alphanumeric;
 use rand::Rng;
 use sha2::{Digest, Sha512};
+use log::warn;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -83,12 +84,12 @@ pub fn verify_hash(password: &str, hash: &str) -> bool {
                 let salt = &decoded_hash[64..];
                 hash1 = ssha512(password.as_bytes(), salt)
             }
-            _ => eprintln!("base64: unable to decode hash: {hash}"),
+            _ => warn!("base64: unable to decode hash: {hash}"),
         }
     } else if hash.starts_with("{SHA512}") {
         hash1 = sha512(password.as_bytes());
     } else {
-        eprintln!("unknown hash type: {hash}");
+        warn!("unknown hash type: {hash}");
     }
     hash == hash1
 }

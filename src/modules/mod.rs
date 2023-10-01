@@ -22,6 +22,8 @@ pub mod file;
 
 use crate::{hashlib, AuthResult, DovecotUser};
 
+use log::warn;
+
 pub trait CredentialsLookup {
     fn credentials_lookup(&mut self, user: &mut DovecotUser) -> AuthResult<bool>;
 }
@@ -49,12 +51,12 @@ pub trait CredentialsVerifyCache: CredentialsVerify {
         password: &str,
     ) -> AuthResult<bool> {
         self.cleanup().unwrap_or_else(|err| {
-            eprintln!("unable to cleanup cache: {err}");
+            warn!("unable to cleanup cache: {err}");
         });
 
         let (mut verified_hashes, mut expired_hashes) =
             self.get_hashes(&user.user).unwrap_or_else(|err| {
-                eprintln!("unable to get hashes from cache: {err}");
+                warn!("unable to get hashes from cache: {err}");
                 Default::default()
             });
         if hashlib::find_hash(password, &mut verified_hashes).is_some() {
@@ -66,14 +68,14 @@ pub trait CredentialsVerifyCache: CredentialsVerify {
             Ok(true) => {
                 let hash = expired_hash.unwrap_or_else(|| self.hash(password));
                 self.insert(&user.user, &hash).unwrap_or_else(|err| {
-                    eprintln!("unable to insert hash into cache: {err}");
+                    warn!("unable to insert hash into cache: {err}");
                 });
                 Ok(true)
             }
             Ok(false) => {
                 if let Some(hash) = expired_hash {
                     self.delete(&user.user, &hash).unwrap_or_else(|err| {
-                        eprintln!("unable to delete hash from cache: {err}");
+                        warn!("unable to delete hash from cache: {err}");
                     });
                 }
                 Ok(false)
@@ -85,7 +87,7 @@ pub trait CredentialsVerifyCache: CredentialsVerify {
         };
 
         if let Err(err) = self.save() {
-            eprintln!("unable to save cache: {err}");
+            warn!("unable to save cache: {err}");
         }
 
         res

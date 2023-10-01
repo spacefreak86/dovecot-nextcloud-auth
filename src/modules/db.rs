@@ -338,17 +338,14 @@ impl CredentialsUpdate for DBUpdateCredentialsModule {
                 return Ok(());
             }
 
-            match InternalVerifyModule::new().credentials_verify(user, password) {
-                Ok(true) => {
-                    let hash = hashlib::hash(password, &self.config.hash_scheme);
-                    update_password(
-                        &user.user,
-                        &hash,
-                        &self.conn_pool,
-                        &self.config.update_password_query,
-                    )?;
-                }
-                _ => {}
+            if InternalVerifyModule::new().credentials_verify(user, password)? {
+                let hash = hashlib::hash(password, &self.config.hash_scheme);
+                update_password(
+                    &user.user,
+                    &hash,
+                    &self.conn_pool,
+                    &self.config.update_password_query,
+                )?;
             }
         }
         Ok(())

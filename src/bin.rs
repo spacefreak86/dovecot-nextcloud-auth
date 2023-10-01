@@ -24,12 +24,14 @@ use dovecot_auth::modules::{
 use dovecot_auth::{authenticate, AuthError, AuthResult, ReplyBin, RC_TEMPFAIL};
 
 use clap::Parser;
+use clap_verbosity_flag::{Verbosity, WarnLevel};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs::File;
 use std::io::prelude::*;
 use std::path::Path;
 use std::time::SystemTime;
+use log::{error, info, warn};
 
 const MYNAME: &str = clap::crate_name!();
 const DEFAULT_CONFIG_CACHE_FILE: &str = "/tmp/dovecot-auth-config.cache";
@@ -139,6 +141,8 @@ struct Args {
     print_example_config: bool,
     #[arg(default_value_t = String::from("/bin/true"))]
     reply_bin: String,
+    #[command(flatten)]
+    verbose: Verbosity<WarnLevel>,
     #[arg(trailing_var_arg = true)]
     args: Option<Vec<String>>,
 }
@@ -149,7 +153,7 @@ fn parse_config_file(mut config_file: File, cache_file: Option<File>) -> AuthRes
     let config: Config = toml::from_str(&content)?;
     if let Some(file) = cache_file {
         config.save_to_file(file).unwrap_or_else(|err| {
-            eprintln!("unable to write config cache file: {err}");
+            warn!("unable to write config cache file: {err}");
         });
     }
     Ok(config)
@@ -185,6 +189,11 @@ where
 fn main() {
     let args = Args::parse();
 
+    env_logger::builder()
+        .format_timestamp(None)
+        .filter_level(args.verbose.log_level_filter())
+        .init();
+
     if args.print_example_config {
         print_example_config();
         std::process::exit(0);
@@ -194,12 +203,12 @@ fn main() {
     let cache_path = env::var("DOVECOT_AUTH_CONFIG_CACHE").ok();
 
     let config = read_config_file(&path, cache_path).unwrap_or_else(|err| {
-        eprintln!("config file error: {path}: {err}");
+        error!("config file: {path}: {err}");
         std::process::exit(err.exit_code());
     });
 
     if !config.configured {
-        eprintln!("{MYNAME} is not configured");
+        error!("{MYNAME} is not configured");
         std::process::exit(RC_TEMPFAIL);
     }
 
@@ -212,14 +221,14 @@ fn main() {
 
     let reply_bin =
         ReplyBin::new(args.reply_bin, args.args.unwrap_or_default()).unwrap_or_else(|err| {
-            eprintln!("argument error: {err}");
+            error!("argument error: {err}");
             std::process::exit(RC_TEMPFAIL);
         });
 
     #[cfg(feature = "db")]
     let conn_pool = config.db_url.as_ref().map(|url| {
         get_conn_pool(url).unwrap_or_else(|err| {
-            eprintln!("unable to parse db_url: {err}");
+            error!("unable to parse db_url: {err}");
             std::process::exit(RC_TEMPFAIL);
         })
     });
@@ -234,7 +243,7 @@ fn main() {
                         lookup_mod = Some(Box::new(DBLookupModule::new(config, pool)));
                     }
                     None => {
-                        eprintln!("config option db_url not set (needed by lookup_module)");
+                        error!("config option db_url not set (needed by lookup_module)");
                         std::process::exit(RC_TEMPFAIL);
                     }
                 };
@@ -265,7 +274,7 @@ fn main() {
                             Some(Box::new(DBCacheVerifyModule::new(config, pool, vrfy_mod)));
                     }
                     None => {
-                        eprintln!("config option db_url not set (needed by verify_cache_module)");
+                        error!("config option db_url not set (needed by verify_cache_module)");
                         std::process::exit(RC_TEMPFAIL);
                     }
                 },
@@ -285,7 +294,7 @@ fn main() {
                     update_mod = Some(Box::new(DBUpdateCredentialsModule::new(config, pool)));
                 }
                 None => {
-                    eprintln!("config option db_url not set (needed by update_credentials_module)");
+                    error!("config option db_url not set (needed by update_credentials_module)");
                     std::process::exit(RC_TEMPFAIL);
                 }
             },
@@ -304,12 +313,10 @@ fn main() {
         Err(err) => {
             match &err {
                 AuthError::PermFail | AuthError::NoUser => {
-                    if args.test {
-                        eprintln!("{err}");
-                    }
+                    info!("{err}");
                 }
                 AuthError::TempFail(msg) => {
-                    eprintln!("{msg}");
+                    warn!("{msg}");
                 }
             }
             err.exit_code()

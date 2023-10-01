@@ -23,6 +23,9 @@ base64 = "*"
 sha2 = "*"
 rand = "*"
 clap = { version="*", features=["derive", "cargo"] }
+clap-verbosity-flag = "*"
+log = "*"
+env_logger = "*"
 
 [features]
 serde = []
