@@ -11,8 +11,9 @@
 // You should have received a copy of the GNU General Public License
 // along with dovecot-auth.  If not, see <http://www.gnu.org/licenses/>.
 
+use crate::hashlib::{hash, Hash, Scheme};
 use crate::{
-    hashlib, AuthError, AuthResult, CredentialsLookup, CredentialsUpdate, CredentialsVerify,
+    AuthError, AuthResult, CredentialsLookup, CredentialsUpdate, CredentialsVerify,
     CredentialsVerifyCache, DovecotUser, InternalVerifyModule,
 };
 
@@ -188,7 +189,7 @@ pub struct DBCacheVerifyConfig {
     pub verify_interval: u64,
     pub max_lifetime: u64,
     pub cleanup: bool,
-    pub hash_scheme: Option<hashlib::Scheme>,
+    pub hash_scheme: Option<Scheme>,
     pub allow_expired_on_error: bool,
 }
 
@@ -199,7 +200,7 @@ impl Default for DBCacheVerifyConfig {
             verify_interval: 60,
             max_lifetime: 86400,
             cleanup: true,
-            hash_scheme: Some(hashlib::Scheme::SSHA512),
+            hash_scheme: Some(Scheme::SSHA512),
             allow_expired_on_error: false,
         }
     }
@@ -209,7 +210,7 @@ pub struct DBCacheVerifyModule {
     config: DBCacheVerifyConfig,
     conn_pool: Pool,
     module: Box<dyn CredentialsVerify>,
-    hash_scheme: hashlib::Scheme,
+    hash_scheme: Scheme,
 }
 
 impl DBCacheVerifyModule {
@@ -222,7 +223,7 @@ impl DBCacheVerifyModule {
             .hash_scheme
             .as_ref()
             .cloned()
-            .unwrap_or(hashlib::Scheme::SSHA512);
+            .unwrap_or(Scheme::SSHA512);
         Self {
             config,
             conn_pool,
@@ -233,11 +234,11 @@ impl DBCacheVerifyModule {
 }
 
 impl CredentialsVerifyCache for DBCacheVerifyModule {
-    fn hash(&self, password: &str) -> String {
-        hashlib::hash(password, &self.hash_scheme)
+    fn hash(&self, password: &str) -> Hash {
+        hash(password, &self.hash_scheme)
     }
 
-    fn get_hashes(&self, user: &str) -> AuthResult<(Vec<String>, Vec<String>)> {
+    fn get_hashes(&self, user: &str) -> AuthResult<(Vec<Hash>, Vec<Hash>)> {
         let hashes = get_hashes(
             user,
             &self.conn_pool,
@@ -245,32 +246,34 @@ impl CredentialsVerifyCache for DBCacheVerifyModule {
             self.config.max_lifetime,
         )?;
 
-        let mut verified_hashes: Vec<String> = Vec::new();
-        let mut expired_hashes: Vec<String> = Vec::new();
+        let mut verified_hashes = Vec::new();
+        let mut expired_hashes = Vec::new();
 
         for (hash, last_verify) in hashes {
-            if last_verify <= self.config.verify_interval {
-                verified_hashes.push(hash);
-            } else if last_verify <= self.config.max_lifetime {
-                expired_hashes.push(hash);
+            if let Ok(hash) = Hash::try_from(hash.as_str()) {
+                if last_verify <= self.config.verify_interval {
+                    verified_hashes.push(hash);
+                } else if last_verify <= self.config.max_lifetime {
+                    expired_hashes.push(hash);
+                }
             }
         }
         Ok((verified_hashes, expired_hashes))
     }
 
-    fn insert(&mut self, user: &str, hash: &str) -> AuthResult<()> {
+    fn insert(&mut self, user: &str, hash: Hash) -> AuthResult<()> {
         Ok(save_hash(
             user,
-            hash,
+            &hash.to_string(),
             &self.conn_pool,
             &self.config.db_table,
         )?)
     }
 
-    fn delete(&mut self, user: &str, hash: &str) -> AuthResult<()> {
+    fn delete(&mut self, user: &str, hash: &Hash) -> AuthResult<()> {
         Ok(delete_hash(
             user,
-            hash,
+            &hash.to_string(),
             &self.conn_pool,
             &self.config.db_table,
         )?)
@@ -304,7 +307,7 @@ impl CredentialsVerifyCache for DBCacheVerifyModule {
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct DBUpdateCredentialsConfig {
     pub update_password_query: String,
-    pub hash_scheme: hashlib::Scheme,
+    pub hash_scheme: Scheme,
 }
 
 impl Default for DBUpdateCredentialsConfig {
@@ -313,7 +316,7 @@ impl Default for DBUpdateCredentialsConfig {
             update_password_query: String::from(
                 "UPDATE mailbox SET password = :password WHERE username = :username",
             ),
-            hash_scheme: hashlib::Scheme::SSHA512,
+            hash_scheme: Scheme::SSHA512,
         }
     }
 }
@@ -345,10 +348,10 @@ impl CredentialsUpdate for DBUpdateCredentialsModule {
             return Ok(false);
         }
 
-        let hash = hashlib::hash(password, &self.config.hash_scheme);
+        let hash = hash(password, &self.config.hash_scheme);
         update_password(
             &user.user,
-            &hash,
+            &hash.to_string(),
             &self.conn_pool,
             &self.config.update_password_query,
         )?;

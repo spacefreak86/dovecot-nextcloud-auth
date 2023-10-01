@@ -11,7 +11,8 @@
 // You should have received a copy of the GNU General Public License
 // along with dovecot-auth.  If not, see <http://www.gnu.org/licenses/>.
 
-use crate::{hashlib, AuthError, AuthResult, CredentialsVerify, CredentialsVerifyCache};
+use crate::{AuthError, AuthResult, CredentialsVerify, CredentialsVerifyCache};
+use crate::hashlib::{Scheme, Hash, hash};
 
 use bincode;
 use fs2::FileExt;
@@ -62,7 +63,7 @@ pub struct FileCacheVerifyConfig {
     pub cache_file: Option<String>,
     pub verify_interval: u64,
     pub max_lifetime: u64,
-    pub hash_scheme: Option<hashlib::Scheme>,
+    pub hash_scheme: Option<Scheme>,
     pub allow_expired_on_error: bool,
 }
 
@@ -72,7 +73,7 @@ impl Default for FileCacheVerifyConfig {
             cache_file: Some(String::from(DEFAULT_VERIFY_CACHE_FILE)),
             verify_interval: 60,
             max_lifetime: 86400,
-            hash_scheme: Some(hashlib::Scheme::SSHA512),
+            hash_scheme: Some(Scheme::SSHA512),
             allow_expired_on_error: false,
         }
     }
@@ -86,7 +87,7 @@ pub struct FileCacheVerifyModule {
     cache_file: String,
     changed: bool,
     module: Box<dyn CredentialsVerify>,
-    hash_scheme: hashlib::Scheme,
+    hash_scheme: Scheme,
 }
 
 impl FileCacheVerifyModule {
@@ -95,7 +96,7 @@ impl FileCacheVerifyModule {
             .hash_scheme
             .as_ref()
             .cloned()
-            .unwrap_or(hashlib::Scheme::SSHA512);
+            .unwrap_or(Scheme::SSHA512);
         let cache_file = config
             .cache_file
             .as_ref()
@@ -126,21 +127,23 @@ impl FileCacheVerifyModule {
 }
 
 impl CredentialsVerifyCache for FileCacheVerifyModule {
-    fn hash(&self, password: &str) -> String {
-        hashlib::hash(password, &self.hash_scheme)
+    fn hash(&self, password: &str) -> Hash {
+        hash(password, &self.hash_scheme)
     }
 
-    fn get_hashes(&self, user: &str) -> AuthResult<(Vec<String>, Vec<String>)> {
+    fn get_hashes(&self, user: &str) -> AuthResult<(Vec<Hash>, Vec<Hash>)> {
         let mut verified_hashes = Vec::new();
         let mut expired_hashes = Vec::new();
         let now = SystemTime::now();
         if let Some(hashes) = self.cache.get(user) {
             for (hash, last_verified) in hashes {
                 if let Ok(duration) = now.duration_since(*last_verified).map(|d| d.as_secs()) {
-                    if duration <= self.config.verify_interval {
-                        verified_hashes.push(hash.clone());
-                    } else if duration <= self.config.max_lifetime {
-                        expired_hashes.push(hash.clone());
+                    if let Ok(hash) = Hash::try_from(hash.as_str()) {
+                        if duration <= self.config.verify_interval {
+                            verified_hashes.push(hash);
+                        } else if duration <= self.config.max_lifetime {
+                            expired_hashes.push(hash);
+                        }
                     }
                 }
             }
@@ -148,7 +151,7 @@ impl CredentialsVerifyCache for FileCacheVerifyModule {
         Ok((verified_hashes, expired_hashes))
     }
 
-    fn insert(&mut self, username: &str, hash: &str) -> AuthResult<()> {
+    fn insert(&mut self, username: &str, hash: Hash) -> AuthResult<()> {
         match self.cache.get_mut(username) {
             Some(hashes) => {
                 hashes.insert(hash.to_string(), SystemTime::now());
@@ -163,10 +166,10 @@ impl CredentialsVerifyCache for FileCacheVerifyModule {
         Ok(())
     }
 
-    fn delete(&mut self, user: &str, hash: &str) -> AuthResult<()> {
+    fn delete(&mut self, user: &str, hash: &Hash) -> AuthResult<()> {
         let mut cleanup = false;
         if let Some(hashes) = self.cache.get_mut(user) {
-            if hashes.remove(hash).is_some() {
+            if hashes.remove(&hash.to_string()).is_some() {
                 self.changed = true;
             }
             if hashes.is_empty() {
