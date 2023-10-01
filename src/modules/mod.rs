@@ -23,6 +23,9 @@ pub mod file;
 use crate::{AuthResult, DovecotUser};
 use crate::hashlib::{verify_password, find_hash, Hash};
 
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
+
 use log::{debug, warn};
 
 pub trait CredentialsLookup {
@@ -138,4 +141,35 @@ impl CredentialsVerify for InternalVerifyModule {
             Err(_) => Ok(false),
         }
     }
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize), serde(tag = "type"))]
+pub enum LookupModule {
+    #[cfg(feature = "db")]
+    DB(db::DBLookupConfig),
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize), serde(tag = "type"))]
+pub enum VerifyModule {
+    Internal,
+    #[cfg(feature = "http")]
+    Http(http::HttpVerifyConfig),
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize), serde(tag = "type"))]
+pub enum VerifyCacheModule {
+    #[cfg(feature = "db")]
+    DB(db::DBCacheVerifyConfig),
+    #[cfg(feature = "serde")]
+    File(file::FileCacheVerifyConfig),
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize), serde(tag = "type"))]
+pub enum UpdateCredentialsModule {
+    #[cfg(feature = "db")]
+    DB(db::DBUpdateCredentialsConfig),
 }

@@ -14,12 +14,14 @@
 #[cfg(feature = "db")]
 use dovecot_auth::modules::db::*;
 
-use dovecot_auth::modules::file::{BinaryCacheFile, FileCacheVerifyConfig, FileCacheVerifyModule};
+use dovecot_auth::modules::file::{BinaryCacheFile, FileCacheVerifyModule};
+
 #[cfg(feature = "http")]
 use dovecot_auth::modules::http::*;
 
 use dovecot_auth::modules::{
-    CredentialsLookup, CredentialsUpdate, CredentialsVerify, InternalVerifyModule,
+    CredentialsLookup, CredentialsUpdate, CredentialsVerify, InternalVerifyModule, LookupModule,
+    UpdateCredentialsModule, VerifyCacheModule, VerifyModule,
 };
 use dovecot_auth::{authenticate, AuthError, AuthResult, ReplyBin, RC_TEMPFAIL};
 
@@ -34,36 +36,6 @@ use std::path::Path;
 use std::time::SystemTime;
 
 const MYNAME: &str = clap::crate_name!();
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum LookupModule {
-    #[cfg(feature = "db")]
-    DB(DBLookupConfig),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum VerifyModule {
-    Internal,
-    #[cfg(feature = "http")]
-    Http(HttpVerifyConfig),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum VerifyCacheModule {
-    #[cfg(feature = "db")]
-    DB(DBCacheVerifyConfig),
-    File(FileCacheVerifyConfig),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum UpdateCredentialsModule {
-    #[cfg(feature = "db")]
-    DB(DBUpdateCredentialsConfig),
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
