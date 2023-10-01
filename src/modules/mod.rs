@@ -42,7 +42,7 @@ pub trait CredentialsVerifyCache: CredentialsVerify {
     fn cleanup(&mut self) -> AuthResult<()>;
     fn module(&mut self) -> &mut Box<dyn CredentialsVerify>;
     fn allow_expired_on_error(&self) -> bool;
-    fn save(&self);
+    fn save(&self) -> AuthResult<()>;
     fn cached_credentials_verify(
         &mut self,
         user: &DovecotUser,
@@ -84,7 +84,9 @@ pub trait CredentialsVerifyCache: CredentialsVerify {
             },
         };
 
-        self.save();
+        if let Err(err) = self.save() {
+            eprintln!("unable to save cache: {err}");
+        }
 
         res
     }

@@ -71,131 +71,11 @@ impl Default for FileCacheVerifyConfig {
 
 type Cache = HashMap<String, HashMap<String, SystemTime>>;
 
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
-struct VerifyCacheFile {
-    cache: Cache,
-}
-
-impl std::ops::Deref for VerifyCacheFile {
-    type Target = Cache;
-
-    fn deref(&self) -> &Self::Target {
-        &self.cache
-    }
-}
-
-impl std::ops::DerefMut for VerifyCacheFile {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.cache
-    }
-}
-
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
-struct VerifyCache {
-    cache: VerifyCacheFile,
-    changed: bool,
-}
-
-impl std::ops::Deref for VerifyCache {
-    type Target = VerifyCacheFile;
-
-    fn deref(&self) -> &Self::Target {
-        &self.cache
-    }
-}
-
-impl std::ops::DerefMut for VerifyCache {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.cache
-    }
-}
-
-impl VerifyCache {
-    fn load_from_file(file: File) -> AuthResult<Self> {
-        let cache = VerifyCacheFile::load_from_file(file)?;
-        Ok(Self {
-            cache,
-            changed: false,
-        })
-    }
-
-    fn save_to_file(&self, file: File) -> AuthResult<()> {
-        self.cache.save_to_file(file)
-    }
-}
-
-impl VerifyCache {
-    fn get_hashes(
-        &self,
-        username: &str,
-        verify_interval: u64,
-        max_lifetime: u64,
-    ) -> (Vec<String>, Vec<String>) {
-        let mut verified_hashes = Vec::new();
-        let mut expired_hashes = Vec::new();
-        let now = SystemTime::now();
-        if let Some(hashes) = self.cache.get(username) {
-            for (hash, last_verified) in hashes {
-                if let Ok(duration) = now.duration_since(*last_verified).map(|d| d.as_secs()) {
-                    if duration <= verify_interval {
-                        verified_hashes.push(hash.clone());
-                    } else if duration <= max_lifetime {
-                        expired_hashes.push(hash.clone());
-                    }
-                }
-            }
-        }
-        (verified_hashes, expired_hashes)
-    }
-
-    fn cleanup(&mut self, max_lifetime: u64) {
-        let now = SystemTime::now();
-        let mut cleanup = false;
-        for hashes in self.cache.values_mut() {
-            hashes.retain(
-                |_, last_verified| match now.duration_since(*last_verified) {
-                    Ok(duration) => {
-                        let valid = duration.as_secs() <= max_lifetime;
-                        if valid == false {
-                            self.changed = true;
-                        }
-                        valid
-                    }
-                    Err(_) => {
-                        self.changed = true;
-                        false
-                    }
-                },
-            );
-            if hashes.is_empty() {
-                cleanup = true;
-            }
-        }
-        if cleanup {
-            self.cache.retain(|_, hashes| !hashes.is_empty());
-        }
-    }
-
-    fn delete(&mut self, username: &str, hash: &str) {
-        let mut cleanup = false;
-        if let Some(hashes) = self.cache.get_mut(username) {
-            if hashes.remove(hash).is_some() {
-                self.changed = true;
-            }
-            if hashes.is_empty() {
-                cleanup = true;
-            }
-        }
-        if cleanup {
-            self.cache.retain(|_, hashes| !hashes.is_empty());
-        }
-    }
-}
-
 pub struct FileCacheVerifyModule {
     config: FileCacheVerifyConfig,
-    cache: VerifyCache,
+    cache: Cache,
     cache_file: String,
+    changed: bool,
     module: Box<dyn CredentialsVerify>,
     hash_scheme: hashlib::Scheme,
 }
@@ -216,11 +96,11 @@ impl FileCacheVerifyModule {
             .cache_file
             .as_ref()
             .map(|path| match File::open(path) {
-                Ok(file) => VerifyCache::load_from_file(file).unwrap_or_else(|err| {
+                Ok(file) => Cache::load_from_file(file).unwrap_or_else(|err| {
                     eprintln!("unable to deserialize cache: {err}");
-                    VerifyCache::default()
+                    Default::default()
                 }),
-                Err(_) => VerifyCache::default(),
+                Err(_) => Default::default(),
             })
             .unwrap_or_default();
 
@@ -228,6 +108,7 @@ impl FileCacheVerifyModule {
             config,
             cache,
             cache_file,
+            changed: false,
             module,
             hash_scheme,
         }
@@ -240,9 +121,21 @@ impl CredentialsVerifyCache for FileCacheVerifyModule {
     }
 
     fn get_hashes(&self, user: &str) -> AuthResult<(Vec<String>, Vec<String>)> {
-        Ok(self
-            .cache
-            .get_hashes(user, self.config.verify_interval, self.config.max_lifetime))
+        let mut verified_hashes = Vec::new();
+        let mut expired_hashes = Vec::new();
+        let now = SystemTime::now();
+        if let Some(hashes) = self.cache.get(user) {
+            for (hash, last_verified) in hashes {
+                if let Ok(duration) = now.duration_since(*last_verified).map(|d| d.as_secs()) {
+                    if duration <= self.config.verify_interval {
+                        verified_hashes.push(hash.clone());
+                    } else if duration <= self.config.max_lifetime {
+                        expired_hashes.push(hash.clone());
+                    }
+                }
+            }
+        }
+        Ok((verified_hashes, expired_hashes))
     }
 
     fn insert(&mut self, username: &str, hash: &str) -> AuthResult<()> {
@@ -256,41 +149,70 @@ impl CredentialsVerifyCache for FileCacheVerifyModule {
                 self.cache.insert(username.to_string(), hashes);
             }
         };
-        self.cache.changed = true;
+        self.changed = true;
         Ok(())
     }
 
     fn delete(&mut self, user: &str, hash: &str) -> AuthResult<()> {
-        self.cache.delete(user, hash);
+        let mut cleanup = false;
+        if let Some(hashes) = self.cache.get_mut(user) {
+            if hashes.remove(hash).is_some() {
+                self.changed = true;
+            }
+            if hashes.is_empty() {
+                cleanup = true;
+            }
+        }
+        if cleanup {
+            self.cache.retain(|_, hashes| !hashes.is_empty());
+        }
         Ok(())
     }
 
     fn cleanup(&mut self) -> AuthResult<()> {
-        self.cache.cleanup(self.config.max_lifetime);
+        let now = SystemTime::now();
+        let mut cleanup = false;
+        for hashes in self.cache.values_mut() {
+            hashes.retain(
+                |_, last_verified| match now.duration_since(*last_verified) {
+                    Ok(duration) => {
+                        let valid = duration.as_secs() <= self.config.max_lifetime;
+                        if valid == false {
+                            self.changed = true;
+                        }
+                        valid
+                    }
+                    Err(_) => {
+                        self.changed = true;
+                        false
+                    }
+                },
+            );
+            if hashes.is_empty() {
+                cleanup = true;
+            }
+        }
+        if cleanup {
+            self.cache.retain(|_, hashes| !hashes.is_empty());
+        }
+
         Ok(())
     }
 
-    fn save(&self) {
-        if self.cache.changed {
+    fn save(&self) -> AuthResult<()> {
+        if self.changed {
             match File::options().write(true).open(&self.cache_file) {
-                Ok(file) => {
-                    self.cache.save_to_file(file).unwrap_or_else(|err| {
-                        eprintln!("unable to write cache_file: {err}");
-                    });
-                }
-                Err(_) => match File::create(&self.cache_file) {
-                    Ok(file) => {
-                        if let Ok(metadata) = file.metadata() {
-                            metadata.permissions().set_mode(0o600);
-                        }
-                        self.cache.save_to_file(file).unwrap_or_else(|err| {
-                            eprintln!("unable to write cache_file: {err}");
-                        });
+                Ok(file) => self.cache.save_to_file(file)?,
+                Err(_) => {
+                    let file = File::create(&self.cache_file)?;
+                    if let Ok(metadata) = file.metadata() {
+                        metadata.permissions().set_mode(0o600);
                     }
-                    Err(err) => eprintln!("unable to create cache_file: {err}"),
-                },
+                    self.cache.save_to_file(file)?
+                }
             };
         }
+        Ok(())
     }
 
     fn module(&mut self) -> &mut Box<dyn CredentialsVerify> {

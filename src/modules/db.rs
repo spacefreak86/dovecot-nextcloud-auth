@@ -251,7 +251,7 @@ impl CredentialsVerifyCache for DBCacheVerifyModule {
         for (hash, last_verify) in hashes {
             if last_verify <= self.config.verify_interval {
                 verified_hashes.push(hash);
-            } else {
+            } else if last_verify <= self.config.max_lifetime {
                 expired_hashes.push(hash);
             }
         }
@@ -287,7 +287,9 @@ impl CredentialsVerifyCache for DBCacheVerifyModule {
         Ok(())
     }
 
-    fn save(&self) {}
+    fn save(&self) -> AuthResult<()> {
+        Ok(())
+    }
 
     fn module(&mut self) -> &mut Box<dyn CredentialsVerify> {
         &mut self.module
