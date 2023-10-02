@@ -36,10 +36,10 @@ use std::fs::File;
 use std::io::Read;
 use std::os::unix::io::FromRawFd;
 
-pub const RC_PERMFAIL: i32 = 1;
-pub const RC_NOUSER: i32 = 3;
-pub const RC_TEMPFAIL: i32 = 111;
-pub const INPUT_FD: i32 = 3;
+pub const DOVECOT_PERMFAIL: i32 = 1;
+pub const DOVECOT_NOUSER: i32 = 3;
+pub const DOVECOT_TEMPFAIL: i32 = 111;
+pub const DOVECOT_INPUT_FD: i32 = 3;
 
 #[derive(Debug, Clone)]
 pub enum AuthError {
@@ -63,9 +63,9 @@ impl std::error::Error for AuthError {}
 impl AuthError {
     pub fn exit_code(&self) -> i32 {
         match self {
-            Self::PermFail => RC_PERMFAIL,
-            Self::NoUser => RC_NOUSER,
-            Self::TempFail(_) => RC_TEMPFAIL,
+            Self::PermFail => DOVECOT_PERMFAIL,
+            Self::NoUser => DOVECOT_NOUSER,
+            Self::TempFail(_) => DOVECOT_TEMPFAIL,
         }
     }
 }
@@ -315,7 +315,7 @@ impl ReplyBin {
 }
 
 pub fn read_credentials_from_fd(fd: Option<i32>) -> AuthResult<(String, String)> {
-    let fd = fd.unwrap_or(INPUT_FD);
+    let fd = fd.unwrap_or(DOVECOT_INPUT_FD);
     let mut f = unsafe { File::from_raw_fd(fd) };
     let mut input = String::new();
     f.read_to_string(&mut input)?;

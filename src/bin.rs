@@ -19,7 +19,7 @@ use dovecot_auth::file::{BinaryCacheFile, FileCacheVerifyModule};
 #[cfg(feature = "http")]
 use dovecot_auth::http::*;
 
-use dovecot_auth::{authenticate, AuthError, AuthResult, ReplyBin, RC_TEMPFAIL};
+use dovecot_auth::{authenticate, AuthError, AuthResult, ReplyBin, DOVECOT_TEMPFAIL};
 use dovecot_auth::{
     CredentialsLookup, CredentialsUpdate, CredentialsVerify, InternalVerifyModule, LookupModule,
     UpdateCredentialsModule, VerifyCacheModule, VerifyModule,
@@ -209,7 +209,7 @@ fn main() {
 
     if !config.configured {
         error!("{MYNAME} is not configured");
-        std::process::exit(RC_TEMPFAIL);
+        std::process::exit(DOVECOT_TEMPFAIL);
     }
 
     let mut fd = None;
@@ -222,14 +222,14 @@ fn main() {
     let reply_bin =
         ReplyBin::new(args.reply_bin, args.args.unwrap_or_default()).unwrap_or_else(|err| {
             error!("argument error: {err}");
-            std::process::exit(RC_TEMPFAIL);
+            std::process::exit(DOVECOT_TEMPFAIL);
         });
 
     #[cfg(feature = "db")]
     let conn_pool = config.db_url.as_ref().map(|url| {
         get_conn_pool(url).unwrap_or_else(|err| {
             error!("unable to parse db_url: {err}");
-            std::process::exit(RC_TEMPFAIL);
+            std::process::exit(DOVECOT_TEMPFAIL);
         })
     });
 
@@ -244,7 +244,7 @@ fn main() {
                     }
                     None => {
                         error!("config option db_url not set (needed by lookup_module)");
-                        std::process::exit(RC_TEMPFAIL);
+                        std::process::exit(DOVECOT_TEMPFAIL);
                     }
                 };
             }
@@ -275,7 +275,7 @@ fn main() {
                     }
                     None => {
                         error!("config option db_url not set (needed by verify_cache_module)");
-                        std::process::exit(RC_TEMPFAIL);
+                        std::process::exit(DOVECOT_TEMPFAIL);
                     }
                 },
                 VerifyCacheModule::File(config) => {
@@ -295,7 +295,7 @@ fn main() {
                 }
                 None => {
                     error!("config option db_url not set (needed by update_credentials_module)");
-                    std::process::exit(RC_TEMPFAIL);
+                    std::process::exit(DOVECOT_TEMPFAIL);
                 }
             },
         };
