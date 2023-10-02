@@ -77,9 +77,9 @@ pub struct Hash {
 
 impl Display for Hash {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let scheme = &self.scheme;
+        let scheme = self.scheme.prefix();
         let hash = &self.hash;
-        write!(f, "{{{scheme}}}{hash}")
+        write!(f, "{scheme}{hash}")
     }
 }
 
@@ -175,10 +175,16 @@ pub fn find_hash<T: AsRef<str>>(password: T, hash_list: &[Hash]) -> Option<&Hash
 
 #[cfg(test)]
 mod tests {
-    use crate::hashlib::{find_hash, hash, verify_password, Scheme};
+    use crate::hashlib::{find_hash, hash, verify_password, Hash, Scheme};
 
     const TEST_PASSWORD: &'static str = "TestPass ä?=%*@+-ç£{}()!#\"'~`";
     const TEST_PASSWORD2: &'static str = "TestPass2 ä?=%*@+-ç£{}()!#\"'~`";
+
+    const TEST_PASSWORD_SSHA512: &'static str = "{SSHA512}gcZ28b5vc9Vbj4yWcKWh8uAPKrGsaa5nHSbuS4q2kxvIIKfTVBDMC/3oZOFPa4gTEMODWdydoimakyp4r01V128xTWh3";
+    const TEST_PASSWORD_SSHA512_BAD: &'static str = "{SSHA512}gcZ28b5vc9Vbj4yWcKWh8uAPKrGsaa5nHSbuS4q2kxvIIKfTVBDMC/3oZOFPa4gTEMODWdydoimakyp4r01V128xTWh4";
+    const TEST_PASSWORD_SHA512: &'static str = "{SHA512}ZzYTXW02PU1y/z4tXXBmoXSJihXhpnaTODYof7GpLfjkFycWLBKLdHkP4bRWEkYJsD3HjgTn2drxj8nzgBUckQ==";
+    const TEST_PASSWORD_SHA512_BAD: &'static str = "{SHA512}ZzYTXW02PU1y/z4tXXBmoXSJihXhpnaTODYof7GpLfjkFycWLBKLdHkP4bRWEkYJsD3HjgTn2drxj8nzgAUckQ==";
+
 
     #[test]
     fn test_ssha512_hash_and_verify() {
@@ -208,5 +214,31 @@ mod tests {
         let sha512_hash = hash(TEST_PASSWORD2, &Scheme::SHA512);
         hashes.push(sha512_hash.clone());
         assert_eq!(find_hash(TEST_PASSWORD2, &mut hashes), Some(&sha512_hash));
+    }
+
+    #[test]
+    fn test_display_and_tryfrom() {
+        let ssha512_hash = hash(TEST_PASSWORD, &Scheme::SSHA512);
+        let hash_string = ssha512_hash.to_string();
+        assert_eq!(ssha512_hash, Hash::try_from(hash_string.as_str()).unwrap());
+
+        let sha512_hash = hash(TEST_PASSWORD, &Scheme::SHA512);
+        let hash_string = sha512_hash.to_string();
+        assert_eq!(sha512_hash, Hash::try_from(hash_string.as_str()).unwrap());
+
+        assert_eq!(Hash::try_from("{INVALID}HASHDATA"), Err("unknown hash type"));
+    }
+
+    #[test]
+    fn test_verify_password() {
+        let ssha512_hash = Hash::try_from(TEST_PASSWORD_SSHA512).unwrap();
+        let ssha512_hash_bad = Hash::try_from(TEST_PASSWORD_SSHA512_BAD).unwrap();
+        assert_eq!(verify_password(TEST_PASSWORD, &ssha512_hash), true);
+        assert_eq!(verify_password(TEST_PASSWORD, &ssha512_hash_bad), false);
+
+        let sha512_hash = Hash::try_from(TEST_PASSWORD_SHA512).unwrap();
+        let sha512_hash_bad = Hash::try_from(TEST_PASSWORD_SHA512_BAD).unwrap();
+        assert_eq!(verify_password(TEST_PASSWORD, &sha512_hash), true);
+        assert_eq!(verify_password(TEST_PASSWORD, &sha512_hash_bad), false);
     }
 }
