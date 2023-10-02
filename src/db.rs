@@ -35,14 +35,14 @@ pub fn get_conn_pool(url: &str) -> Result<Pool, mysql::Error> {
 }
 
 fn get_user(user: &mut DovecotUser, pool: &Pool, user_query: &str) -> Result<bool> {
-    if user.user.is_empty() {
+    if user.username.is_empty() {
         return Ok(false);
     }
 
     let mut conn = pool.get_conn()?;
     let stmt = conn.prep(user_query)?;
 
-    match conn.exec_first::<Row, _, _>(&stmt, params! { "username" => &user.user })? {
+    match conn.exec_first::<Row, _, _>(&stmt, params! { "username" => &user.username })? {
         Some(row) => {
             let mut got_any_value = false;
             for column in row.columns_ref() {
@@ -56,13 +56,13 @@ fn get_user(user: &mut DovecotUser, pool: &Pool, user_query: &str) -> Result<boo
                 if !value.is_empty() {
                     let mut got_value = true;
                     match column_name.as_ref() {
-                        "user" => user.user = value,
-                        "password" => user.password = value,
+                        "user" => user.username = value,
+                        "password" => user.password = Some(value),
                         "home" => user.home = Some(value),
-                        "mail" => user.mail = Some(value),
-                        "uid" => user.uid = Some(value),
-                        "gid" => user.gid = Some(value),
-                        "quota_rule" => user.quota_rule = Some(value),
+                        "mail" => user.userdb_mail = Some(value),
+                        "uid" => user.userdb_uid = Some(value),
+                        "gid" => user.userdb_gid = Some(value),
+                        "quota_rule" => user.userdb_quota_rule = Some(value),
                         _ => got_value = false,
                     }
                     if got_value {
@@ -339,8 +339,14 @@ impl CredentialsUpdate for DBUpdateCredentialsModule {
             return Ok(false);
         }
 
-        let hash_prefix: String = format!("{{{}}}", &self.config.hash_scheme.to_string());
-        if user.password.starts_with(&hash_prefix) {
+        let user_pass = match &user.password {
+            Some(password) => password,
+            None => {
+                return Err(AuthError::TempFail("password field not set".to_string()));
+            }
+        };
+
+        if user_pass.starts_with(self.config.hash_scheme.hash_prefix()) {
             return Ok(false);
         }
 
@@ -350,7 +356,7 @@ impl CredentialsUpdate for DBUpdateCredentialsModule {
 
         let hash = Hash::new(password, &self.config.hash_scheme);
         update_password(
-            &user.user,
+            &user.username,
             &hash.to_string(),
             &self.conn_pool,
             &self.config.update_password_query,

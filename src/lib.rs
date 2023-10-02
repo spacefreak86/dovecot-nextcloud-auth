@@ -22,7 +22,6 @@ pub mod hashlib;
 #[cfg(feature = "http")]
 pub mod http;
 
-
 use hashlib::*;
 use log::{debug, info, warn};
 use nix::unistd::execvp;
@@ -36,15 +35,23 @@ use std::fs::File;
 use std::io::Read;
 use std::os::unix::io::FromRawFd;
 
+/// Exit code to signal invalid credentials
 pub const DOVECOT_PERMFAIL: i32 = 1;
+/// Exit code to signal user not found
 pub const DOVECOT_NOUSER: i32 = 3;
+/// Exit code to signal temporary failures
 pub const DOVECOT_TEMPFAIL: i32 = 111;
+/// Default file descriptor to read credentials from
 pub const DOVECOT_INPUT_FD: i32 = 3;
 
+/// Represents an exit code for Dovecot
 #[derive(Debug, Clone)]
 pub enum AuthError {
+    /// Invalid credentials
     PermFail,
+    /// User not found
     NoUser,
+    /// Temporary failure
     TempFail(String),
 }
 
@@ -61,6 +68,7 @@ impl std::fmt::Display for AuthError {
 impl std::error::Error for AuthError {}
 
 impl AuthError {
+    /// Returns the corresponding exit code for Dovecot
     pub fn exit_code(&self) -> i32 {
         match self {
             Self::PermFail => DOVECOT_PERMFAIL,
@@ -85,51 +93,56 @@ impl From<toml::de::Error> for AuthError {
 
 pub type AuthResult<T> = Result<T, AuthError>;
 
+/// Represents a Dovecot user
 #[derive(Debug, Clone, Default)]
 pub struct DovecotUser {
-    pub user: String,
-    pub password: String,
+    pub username: String,
+    pub password: Option<String>,
     pub home: Option<String>,
-    pub mail: Option<String>,
-    pub uid: Option<String>,
-    pub gid: Option<String>,
-    pub quota_rule: Option<String>,
+    pub userdb_mail: Option<String>,
+    pub userdb_uid: Option<String>,
+    pub userdb_gid: Option<String>,
+    pub userdb_quota_rule: Option<String>,
 }
 
 impl DovecotUser {
-    pub fn new(username: String) -> Self {
+    /// Returns a Dovecot user with the username given
+    pub fn new<T: AsRef<str>>(username: T) -> Self {
         Self {
-            user: username,
+            username: username.as_ref().to_string(),
             ..Default::default()
         }
     }
 
+    /// Return a HashMap containing environment variables
+    /// 
+    /// It is used to hand over user information to Dovecot
     pub fn get_env_vars(&self) -> HashMap<&'static str, String> {
         let mut extra: Vec<&str> = Vec::new();
         let mut map: HashMap<&'static str, String> = HashMap::new();
 
-        map.insert("USER", self.user.clone());
+        map.insert("USER", self.username.clone());
 
         if let Some(home) = self.home.as_ref() {
             map.insert("HOME", home.clone());
         }
 
-        if let Some(mail) = self.mail.as_ref() {
+        if let Some(mail) = self.userdb_mail.as_ref() {
             map.insert("userdb_mail", mail.clone());
             extra.push("userdb_mail");
         }
 
-        if let Some(uid) = self.uid.as_ref() {
+        if let Some(uid) = self.userdb_uid.as_ref() {
             map.insert("userdb_uid", uid.clone());
             extra.push("userdb_uid");
         }
 
-        if let Some(gid) = self.gid.as_ref() {
+        if let Some(gid) = self.userdb_gid.as_ref() {
             map.insert("userdb_gid", gid.clone());
             extra.push("userdb_gid");
         }
 
-        if let Some(quota_rule) = self.quota_rule.as_ref() {
+        if let Some(quota_rule) = self.userdb_quota_rule.as_ref() {
             map.insert("userdb_quota_rule", quota_rule.clone());
             extra.push("userdb_quota_rule");
         }
@@ -141,18 +154,22 @@ impl DovecotUser {
     }
 }
 
+/// Trait which defines a credentials lookup module for the authenticate function
 pub trait CredentialsLookup {
     fn credentials_lookup(&mut self, user: &mut DovecotUser) -> AuthResult<bool>;
 }
 
+/// Trait which defines a credentials verify module for the authenticate function
 pub trait CredentialsVerify {
     fn credentials_verify(&mut self, user: &DovecotUser, password: &str) -> AuthResult<bool>;
 }
 
+/// Trait which defines a update credentials module for the authenticate function
 pub trait CredentialsUpdate {
     fn update_credentials(&self, user: &DovecotUser, password: &str) -> AuthResult<bool>;
 }
 
+/// Trait which defines a cached credentials verify module for the authenticate function
 pub trait CredentialsVerifyCache: CredentialsVerify {
     fn hash(&self, password: &str) -> Hash;
     fn get_hashes(&self, user: &str) -> AuthResult<(Vec<Hash>, Vec<Hash>)>;
@@ -172,7 +189,7 @@ pub trait CredentialsVerifyCache: CredentialsVerify {
             warn!("unable to cleanup cache: {err}");
         });
 
-        let (verified_hashes, expired_hashes) = self.get_hashes(&user.user).unwrap_or_else(|err| {
+        let (verified_hashes, expired_hashes) = self.get_hashes(&user.username).unwrap_or_else(|err| {
             warn!("unable to get hashes from cache: {err}");
             Default::default()
         });
@@ -189,14 +206,14 @@ pub trait CredentialsVerifyCache: CredentialsVerify {
             Ok(true) => {
                 debug!("verification succeeded, insert hash into cache");
                 let hash = expired_hash.unwrap_or_else(|| self.hash(password));
-                self.insert(&user.user, hash).unwrap_or_else(|err| {
+                self.insert(&user.username, hash).unwrap_or_else(|err| {
                     warn!("unable to insert hash into cache: {err}");
                 });
                 Ok(true)
             }
             Ok(false) => {
                 if let Some(hash) = expired_hash {
-                    self.delete(&user.user, &hash).unwrap_or_else(|err| {
+                    self.delete(&user.username, &hash).unwrap_or_else(|err| {
                         warn!("unable to delete hash from cache: {err}");
                     });
                 }
@@ -246,9 +263,14 @@ impl InternalVerifyModule {
 
 impl CredentialsVerify for InternalVerifyModule {
     fn credentials_verify(&mut self, user: &DovecotUser, password: &str) -> AuthResult<bool> {
-        match Hash::try_from(user.password.as_str()) {
-            Ok(hash) => Ok(verify_value(password, &hash)),
-            Err(_) => Ok(false),
+        match user
+            .password
+            .as_ref()
+            .map(|p| Hash::try_from(p.as_str()).ok())
+            .flatten()
+        {
+            Some(hash) => Ok(verify_value(password, &hash)),
+            None => Ok(false),
         }
     }
 }
@@ -341,7 +363,7 @@ pub fn authenticate(
     let mut user = DovecotUser::new(username);
 
     if env::var("CREDENTIALS_LOOKUP").unwrap_or_default() == "1" {
-        debug!("lookup credentials of user {}", user.user);
+        debug!("lookup credentials of user {}", user.username);
         match lookup_mod.as_mut() {
             Some(module) => {
                 if !module.credentials_lookup(&mut user)? {
@@ -357,7 +379,7 @@ pub fn authenticate(
             }
         }
     } else {
-        debug!("verify credentials of user {}", user.user);
+        debug!("verify credentials of user {}", user.username);
 
         let mut internal_verified = false;
 

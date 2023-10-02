@@ -52,10 +52,10 @@ impl HttpVerifyModule {
 
 impl CredentialsVerify for HttpVerifyModule {
     fn credentials_verify(&mut self, user: &DovecotUser, password: &str) -> AuthResult<bool> {
-        let username = encode(&user.user);
+        let username = encode(&user.username);
         let url = self.config.url.replace("::USERNAME::", &username);
 
-        let credentials = general_purpose::STANDARD.encode(format!("{}:{password}", user.user));
+        let credentials = general_purpose::STANDARD.encode(format!("{}:{password}", user.username));
         let authorization = format!("Basic {credentials}");
 
         let request = ureq::request(&self.config.method, &url).set("Authorization", &authorization);
