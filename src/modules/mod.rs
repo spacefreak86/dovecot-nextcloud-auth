@@ -21,7 +21,7 @@ pub mod http;
 pub mod file;
 
 use crate::{AuthResult, DovecotUser};
-use crate::hashlib::{verify_password, find_hash, Hash};
+use crate::hashlib::{verify_value, find_hash, Hash};
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -136,7 +136,7 @@ impl CredentialsVerify for InternalVerifyModule {
     fn credentials_verify(&mut self, user: &DovecotUser, password: &str) -> AuthResult<bool> {
         match Hash::try_from(user.password.as_str()) {
             Ok(hash) => {
-                Ok(verify_password(password, &hash))
+                Ok(verify_value(password, &hash))
             },
             Err(_) => Ok(false),
         }
