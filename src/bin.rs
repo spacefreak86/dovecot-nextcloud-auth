@@ -12,18 +12,18 @@
 // along with dovecot-auth.  If not, see <http://www.gnu.org/licenses/>.
 
 #[cfg(feature = "db")]
-use dovecot_auth::modules::db::*;
+use dovecot_auth::db::*;
 
-use dovecot_auth::modules::file::{BinaryCacheFile, FileCacheVerifyModule};
+use dovecot_auth::file::{BinaryCacheFile, FileCacheVerifyModule};
 
 #[cfg(feature = "http")]
-use dovecot_auth::modules::http::*;
+use dovecot_auth::http::*;
 
-use dovecot_auth::modules::{
+use dovecot_auth::{authenticate, AuthError, AuthResult, ReplyBin, RC_TEMPFAIL};
+use dovecot_auth::{
     CredentialsLookup, CredentialsUpdate, CredentialsVerify, InternalVerifyModule, LookupModule,
     UpdateCredentialsModule, VerifyCacheModule, VerifyModule,
 };
-use dovecot_auth::{authenticate, AuthError, AuthResult, ReplyBin, RC_TEMPFAIL};
 
 use clap::Parser;
 use clap_verbosity_flag::{Verbosity, WarnLevel};
