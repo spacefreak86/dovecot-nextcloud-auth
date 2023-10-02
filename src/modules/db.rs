@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License
 // along with dovecot-auth.  If not, see <http://www.gnu.org/licenses/>.
 
-use crate::hashlib::{hash, Hash, Scheme};
+use crate::hashlib::{Hash, Scheme};
 use crate::{
     AuthError, AuthResult, CredentialsLookup, CredentialsUpdate, CredentialsVerify,
     CredentialsVerifyCache, DovecotUser, InternalVerifyModule,
@@ -235,7 +235,7 @@ impl DBCacheVerifyModule {
 
 impl CredentialsVerifyCache for DBCacheVerifyModule {
     fn hash(&self, password: &str) -> Hash {
-        hash(password, &self.hash_scheme)
+        Hash::new(password, &self.hash_scheme)
     }
 
     fn get_hashes(&self, user: &str) -> AuthResult<(Vec<Hash>, Vec<Hash>)> {
@@ -348,7 +348,7 @@ impl CredentialsUpdate for DBUpdateCredentialsModule {
             return Ok(false);
         }
 
-        let hash = hash(password, &self.config.hash_scheme);
+        let hash = Hash::new(password, &self.config.hash_scheme);
         update_password(
             &user.user,
             &hash.to_string(),

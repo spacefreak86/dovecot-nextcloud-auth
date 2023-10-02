@@ -12,7 +12,7 @@
 // along with dovecot-auth.  If not, see <http://www.gnu.org/licenses/>.
 
 use crate::{AuthError, AuthResult, CredentialsVerify, CredentialsVerifyCache};
-use crate::hashlib::{Scheme, Hash, hash};
+use crate::hashlib::{Scheme, Hash};
 
 use bincode;
 use fs2::FileExt;
@@ -128,7 +128,7 @@ impl FileCacheVerifyModule {
 
 impl CredentialsVerifyCache for FileCacheVerifyModule {
     fn hash(&self, password: &str) -> Hash {
-        hash(password, &self.hash_scheme)
+        Hash::new(password, &self.hash_scheme)
     }
 
     fn get_hashes(&self, user: &str) -> AuthResult<(Vec<Hash>, Vec<Hash>)> {

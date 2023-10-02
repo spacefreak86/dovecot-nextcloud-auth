@@ -75,6 +75,21 @@ pub struct Hash {
     pub hash: String,
 }
 
+impl Hash {
+    pub fn new(password: &str, scheme: &Scheme) -> Self {
+        match scheme {
+            Scheme::SSHA512 => {
+                let salt: Vec<u8> = rand::thread_rng()
+                    .sample_iter(&Alphanumeric)
+                    .take(5)
+                    .collect();
+                ssha512(password.as_bytes(), &salt)
+            }
+            Scheme::SHA512 => sha512(password.as_bytes()),
+        }
+    }
+}
+
 impl Display for Hash {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let scheme = self.scheme.prefix();
@@ -115,19 +130,6 @@ pub fn sha512(password: &[u8]) -> Hash {
     Hash {
         scheme: Scheme::SHA512,
         hash,
-    }
-}
-
-pub fn hash(password: &str, scheme: &Scheme) -> Hash {
-    match scheme {
-        Scheme::SSHA512 => {
-            let salt: Vec<u8> = rand::thread_rng()
-                .sample_iter(&Alphanumeric)
-                .take(5)
-                .collect();
-            ssha512(password.as_bytes(), &salt)
-        }
-        Scheme::SHA512 => sha512(password.as_bytes()),
     }
 }
 
@@ -175,7 +177,7 @@ pub fn find_hash<T: AsRef<str>>(password: T, hash_list: &[Hash]) -> Option<&Hash
 
 #[cfg(test)]
 mod tests {
-    use crate::hashlib::{find_hash, hash, verify_password, Hash, Scheme};
+    use crate::hashlib::{find_hash, verify_password, Hash, Scheme};
 
     const TEST_PASSWORD: &'static str = "TestPass ä?=%*@+-ç£{}()!#\"'~`";
     const TEST_PASSWORD2: &'static str = "TestPass2 ä?=%*@+-ç£{}()!#\"'~`";
@@ -188,41 +190,41 @@ mod tests {
 
     #[test]
     fn test_ssha512_hash_and_verify() {
-        let test_hash = hash(&TEST_PASSWORD, &Scheme::SSHA512);
+        let test_hash = Hash::new(&TEST_PASSWORD, &Scheme::SSHA512);
         assert_eq!(verify_password(TEST_PASSWORD, &test_hash), true);
     }
 
     #[test]
     fn test_sha512_hash_and_verify() {
-        let test_hash = hash(&TEST_PASSWORD, &Scheme::SHA512);
+        let test_hash = Hash::new(&TEST_PASSWORD, &Scheme::SHA512);
         assert_eq!(verify_password(TEST_PASSWORD, &test_hash), true);
     }
 
     #[test]
     fn test_get_matching_hash() {
         let mut hashes = vec![
-            hash("AnotherTestPassword", &Scheme::SSHA512),
-            hash("AndAnotherTestPassword", &Scheme::SHA512),
+            Hash::new("AnotherTestPassword", &Scheme::SSHA512),
+            Hash::new("AndAnotherTestPassword", &Scheme::SHA512),
         ];
 
         assert_eq!(find_hash(TEST_PASSWORD, &mut hashes), None);
-        let ssha512_hash = hash(TEST_PASSWORD, &Scheme::SSHA512);
+        let ssha512_hash = Hash::new(TEST_PASSWORD, &Scheme::SSHA512);
         hashes.insert(1, ssha512_hash.clone());
         assert_eq!(find_hash(TEST_PASSWORD, &mut hashes), Some(&ssha512_hash));
 
         assert_eq!(find_hash(TEST_PASSWORD2, &mut hashes), None);
-        let sha512_hash = hash(TEST_PASSWORD2, &Scheme::SHA512);
+        let sha512_hash = Hash::new(TEST_PASSWORD2, &Scheme::SHA512);
         hashes.push(sha512_hash.clone());
         assert_eq!(find_hash(TEST_PASSWORD2, &mut hashes), Some(&sha512_hash));
     }
 
     #[test]
     fn test_display_and_tryfrom() {
-        let ssha512_hash = hash(TEST_PASSWORD, &Scheme::SSHA512);
+        let ssha512_hash = Hash::new(TEST_PASSWORD, &Scheme::SSHA512);
         let hash_string = ssha512_hash.to_string();
         assert_eq!(ssha512_hash, Hash::try_from(hash_string.as_str()).unwrap());
 
-        let sha512_hash = hash(TEST_PASSWORD, &Scheme::SHA512);
+        let sha512_hash = Hash::new(TEST_PASSWORD, &Scheme::SHA512);
         let hash_string = sha512_hash.to_string();
         assert_eq!(sha512_hash, Hash::try_from(hash_string.as_str()).unwrap());
 
