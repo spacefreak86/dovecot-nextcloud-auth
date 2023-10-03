@@ -233,14 +233,14 @@ fn main() {
         })
     });
 
-    let mut lookup_mod: Option<Box<dyn CredentialsLookup>> = None;
+    let mut lookup_module: Option<Box<dyn CredentialsLookup>> = None;
     if let Some(module) = config.lookup_module {
         match module {
             #[cfg(feature = "db")]
             LookupModule::DB(config) => {
                 match conn_pool.as_ref().cloned() {
                     Some(pool) => {
-                        lookup_mod = Some(Box::new(DBLookupModule::new(config, pool)));
+                        lookup_module = Some(Box::new(DBLookupModule::new(config, pool)));
                     }
                     None => {
                         error!("config option db_url not set (needed by lookup_module)");
@@ -251,26 +251,26 @@ fn main() {
         };
     };
 
-    let mut verify_mod: Option<Box<dyn CredentialsVerify>> = None;
+    let mut verify_module: Option<Box<dyn CredentialsVerify>> = None;
     if let Some(module) = config.verify_module {
         match module {
             #[cfg(feature = "http")]
             VerifyModule::Http(config) => {
-                verify_mod = Some(Box::new(HttpVerifyModule::new(config)));
+                verify_module = Some(Box::new(HttpVerifyModule::new(config)));
             }
             VerifyModule::Internal => {
-                verify_mod = Some(Box::new(InternalVerifyModule {}));
+                verify_module = Some(Box::new(InternalVerifyModule {}));
             }
         };
     };
 
     if let Some(module) = config.verify_cache_module {
-        if let Some(vrfy_mod) = verify_mod {
+        if let Some(vrfy_mod) = verify_module {
             match module {
                 #[cfg(feature = "db")]
                 VerifyCacheModule::DB(config) => match conn_pool.as_ref().cloned() {
                     Some(pool) => {
-                        verify_mod =
+                        verify_module =
                             Some(Box::new(DBCacheVerifyModule::new(config, pool, vrfy_mod)));
                     }
                     None => {
@@ -279,19 +279,19 @@ fn main() {
                     }
                 },
                 VerifyCacheModule::File(config) => {
-                    verify_mod = Some(Box::new(FileCacheVerifyModule::new(config, vrfy_mod)));
+                    verify_module = Some(Box::new(FileCacheVerifyModule::new(config, vrfy_mod)));
                 }
             };
         }
     };
 
-    let mut update_mod: Option<Box<dyn CredentialsUpdate>> = None;
+    let mut update_module: Option<Box<dyn CredentialsUpdate>> = None;
     if let Some(module) = config.update_credentials_module {
         match module {
             #[cfg(feature = "db")]
             UpdateCredentialsModule::DB(config) => match conn_pool.as_ref().cloned() {
                 Some(pool) => {
-                    update_mod = Some(Box::new(DBUpdateCredentialsModule::new(config, pool)));
+                    update_module = Some(Box::new(DBUpdateCredentialsModule::new(config, pool)));
                 }
                 None => {
                     error!("config option db_url not set (needed by update_credentials_module)");
@@ -302,11 +302,11 @@ fn main() {
     };
 
     let rc = match authenticate(
-        &mut lookup_mod,
-        &mut verify_mod,
-        &update_mod,
-        &config.allow_internal_verify_hosts,
-        &reply_bin,
+        lookup_module,
+        verify_module,
+        update_module,
+        config.allow_internal_verify_hosts,
+        reply_bin,
         fd,
     ) {
         Ok(_) => 0,

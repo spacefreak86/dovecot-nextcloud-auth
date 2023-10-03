@@ -114,8 +114,8 @@ impl DovecotUser {
         }
     }
 
-    /// Return a HashMap containing environment variables
-    /// 
+    /// Returns a HashMap containing environment variables
+    ///
     /// It is used to hand over user information to Dovecot
     pub fn get_env_vars(&self) -> HashMap<&'static str, String> {
         let mut extra: Vec<&str> = Vec::new();
@@ -154,31 +154,40 @@ impl DovecotUser {
     }
 }
 
-/// Trait which defines a credentials lookup module for the authenticate function
+/// Trait which defines credentials lookup modules used by the authenticate function
 pub trait CredentialsLookup {
     fn credentials_lookup(&mut self, user: &mut DovecotUser) -> AuthResult<bool>;
 }
 
-/// Trait which defines a credentials verify module for the authenticate function
+/// Trait which defines credentials verify modules used by the authenticate function
 pub trait CredentialsVerify {
     fn credentials_verify(&mut self, user: &DovecotUser, password: &str) -> AuthResult<bool>;
 }
 
-/// Trait which defines a update credentials module for the authenticate function
+/// Trait which defines update credentials modules used by the authenticate function
 pub trait CredentialsUpdate {
     fn update_credentials(&self, user: &DovecotUser, password: &str) -> AuthResult<bool>;
 }
 
-/// Trait which defines a cached credentials verify module for the authenticate function
+/// Trait which defines cached credentials verify modules used by the authenticate function
 pub trait CredentialsVerifyCache: CredentialsVerify {
+    // Return the hash of the password given
     fn hash(&self, password: &str) -> Hash;
+    // Return a tuple of verified and expired hashes of the user given
     fn get_hashes(&self, user: &str) -> AuthResult<(Vec<Hash>, Vec<Hash>)>;
+    // Insert a Hash into the cache
     fn insert(&mut self, user: &str, hash: Hash) -> AuthResult<()>;
+    // Delete a Hash from the cache
     fn delete(&mut self, user: &str, hash: &Hash) -> AuthResult<()>;
+    // Clean the cache (e.g. delete expired hashes)
     fn cleanup(&mut self) -> AuthResult<()>;
+    // Return a mutable reference to the configured credentials verify module
     fn module(&mut self) -> &mut Box<dyn CredentialsVerify>;
+    // Return true if expired hashes are allowed on an error within the credentials verify module
     fn allow_expired_on_error(&self) -> bool;
+    // Save the cache (e.g. to disk)
     fn save(&self) -> AuthResult<()>;
+    // Default implementation of a cached credentials verify procedure, should be sufficient for almost all cases
     fn cached_credentials_verify(
         &mut self,
         user: &DovecotUser,
@@ -189,10 +198,11 @@ pub trait CredentialsVerifyCache: CredentialsVerify {
             warn!("unable to cleanup cache: {err}");
         });
 
-        let (verified_hashes, expired_hashes) = self.get_hashes(&user.username).unwrap_or_else(|err| {
-            warn!("unable to get hashes from cache: {err}");
-            Default::default()
-        });
+        let (verified_hashes, expired_hashes) =
+            self.get_hashes(&user.username).unwrap_or_else(|err| {
+                warn!("unable to get hashes from cache: {err}");
+                Default::default()
+            });
         debug!("verified hashes: {:?}", verified_hashes);
         debug!("try to verify credentials against cached verified hashes");
         if find_hash(password, &verified_hashes).is_some() {
@@ -252,6 +262,9 @@ impl<T: CredentialsVerifyCache> CredentialsVerify for T {
     }
 }
 
+/// Internal credentials verify module
+///
+/// Verifies passwords internally by verifying it against the password hash returned by the credentials lookup module
 #[derive(Debug, Default, Clone)]
 pub struct InternalVerifyModule {}
 
@@ -266,8 +279,7 @@ impl CredentialsVerify for InternalVerifyModule {
         match user
             .password
             .as_ref()
-            .map(|p| Hash::try_from(p.as_str()).ok())
-            .flatten()
+            .and_then(|p| Hash::try_from(p.as_str()).ok())
         {
             Some(hash) => Ok(verify_value(password, &hash)),
             None => Ok(false),
@@ -275,6 +287,7 @@ impl CredentialsVerify for InternalVerifyModule {
     }
 }
 
+/// Represents a credentials lookup module
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize), serde(tag = "type"))]
 pub enum LookupModule {
@@ -282,6 +295,7 @@ pub enum LookupModule {
     DB(db::DBLookupConfig),
 }
 
+/// Represents a credentials verify module
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize), serde(tag = "type"))]
 pub enum VerifyModule {
@@ -290,6 +304,7 @@ pub enum VerifyModule {
     Http(http::HttpVerifyConfig),
 }
 
+/// Represents a cached credentials verify module
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize), serde(tag = "type"))]
 pub enum VerifyCacheModule {
@@ -299,6 +314,7 @@ pub enum VerifyCacheModule {
     File(file::FileCacheVerifyConfig),
 }
 
+/// Represents an update credentials module
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize), serde(tag = "type"))]
 pub enum UpdateCredentialsModule {
@@ -306,12 +322,14 @@ pub enum UpdateCredentialsModule {
     DB(db::DBUpdateCredentialsConfig),
 }
 
+/// Represents the path to a reply binary and arguments to call it with
 pub struct ReplyBin {
     pub reply_bin: CString,
     pub args: Vec<CString>,
 }
 
 impl ReplyBin {
+    /// Returns a reply binary by the binary and arguments given
     pub fn new<B, T>(reply_bin: B, args: Vec<T>) -> Result<Self, NulError>
     where
         B: Into<Vec<u8>>,
@@ -328,7 +346,11 @@ impl ReplyBin {
         })
     }
 
-    pub fn call(&self, user: &DovecotUser) -> nix::Result<Infallible> {
+    /// Sets environment variables for Dovecot and calls the reply binary
+    ///
+    /// The reply binary is called with execvp. The current process image will be replaced
+    /// by the new one, which means that this program actually ends with the call of this function
+    pub fn call(&self, user: DovecotUser) -> nix::Result<Infallible> {
         for (env_var, value) in user.get_env_vars() {
             env::set_var(env_var, value);
         }
@@ -336,6 +358,10 @@ impl ReplyBin {
     }
 }
 
+/// Returns a tuple containg a username and a password
+///
+/// Reads credentials from the raw file descriptor optionally given (defaults to 3).
+/// The input is expected to be in this format: username<NUL>password[<NUL>...]
 pub fn read_credentials_from_fd(fd: Option<i32>) -> AuthResult<(String, String)> {
     let fd = fd.unwrap_or(DOVECOT_INPUT_FD);
     let mut f = unsafe { File::from_raw_fd(fd) };
@@ -351,97 +377,121 @@ pub fn read_credentials_from_fd(fd: Option<i32>) -> AuthResult<(String, String)>
     }
 }
 
-pub fn authenticate(
-    lookup_mod: &mut Option<Box<dyn CredentialsLookup>>,
-    verify_mod: &mut Option<Box<dyn CredentialsVerify>>,
-    update_mod: &Option<Box<dyn CredentialsUpdate>>,
-    allow_internal_verify_hosts: &Option<Vec<String>>,
-    reply_bin: &ReplyBin,
-    fd: Option<i32>,
+pub fn credentials_lookup(
+    mut user: DovecotUser,
+    mut module: Box<dyn CredentialsLookup>,
+    reply_bin: ReplyBin,
 ) -> AuthResult<Infallible> {
-    let (username, password) = read_credentials_from_fd(fd)?;
-    let mut user = DovecotUser::new(username);
+    debug!("credentials lookup, user {}", user.username);
+    if !module.credentials_lookup(&mut user)? {
+        return Err(AuthError::NoUser);
+    }
+    debug!("got user data: {:?}", user);
+    if env::var("AUTHORIZED").unwrap_or_default() == "1" {
+        env::set_var("AUTHORIZED", "2");
+    }
+    reply_bin
+        .call(user)
+        .map_err(|err| AuthError::TempFail(format!("unable to call reply_bin: {err}")))
+}
 
-    if env::var("CREDENTIALS_LOOKUP").unwrap_or_default() == "1" {
-        debug!("lookup credentials of user {}", user.username);
-        match lookup_mod.as_mut() {
-            Some(module) => {
-                if !module.credentials_lookup(&mut user)? {
-                    return Err(AuthError::NoUser);
-                }
+fn credentials_verify(
+    mut user: DovecotUser,
+    password: String,
+    lookup_module: Option<Box<dyn CredentialsLookup>>,
+    mut verify_module: Box<dyn CredentialsVerify>,
+    update_module: Option<Box<dyn CredentialsUpdate>>,
+    reply_bin: ReplyBin,
+    allow_internal_verify_hosts: Option<Vec<String>>,
+) -> AuthResult<Infallible> {
+    debug!("verify credentials of user {}", user.username);
+
+    let mut internal_verified = false;
+
+    if let Some(mut module) = lookup_module {
+        debug!("lookup up user data");
+        match module.credentials_lookup(&mut user) {
+            Ok(true) => {
                 debug!("got user data: {:?}", user);
-                if env::var("AUTHORIZED").unwrap_or_default() == "1" {
-                    env::set_var("AUTHORIZED", "2");
-                }
-            }
-            None => {
-                return Err(AuthError::NoUser);
-            }
-        }
-    } else {
-        debug!("verify credentials of user {}", user.username);
 
-        let mut internal_verified = false;
-
-        if let Some(module) = lookup_mod {
-            debug!("lookup up user data");
-            match module.credentials_lookup(&mut user) {
-                Ok(true) => {
-                    debug!("got user data: {:?}", user);
-
-                    if let Some(module) = update_mod {
-                        match module.update_credentials(&user, &password) {
-                            Ok(true) => debug!("successfully updated credentials"),
-                            Ok(false) => debug!("credentials where not updated"),
-                            Err(err) => warn!("unable to update credentials: {err}"),
-                        }
+                if let Some(module) = update_module {
+                    match module.update_credentials(&user, &password) {
+                        Ok(true) => debug!("successfully updated credentials"),
+                        Ok(false) => debug!("credentials where not updated"),
+                        Err(err) => warn!("unable to update credentials: {err}"),
                     }
+                }
 
-                    if let Some(allowed) = allow_internal_verify_hosts {
-                        debug!("allowed for internal verification: {:?}", allowed);
-                        if let Ok(remote_ip) = env::var("REMOTE_IP") {
-                            debug!("got env variable REMOTE_IP={remote_ip}");
-                            if !remote_ip.is_empty() && allowed.contains(&remote_ip) {
-                                debug!("try internally verificate user credentials");
-                                if InternalVerifyModule::new()
-                                    .credentials_verify(&user, &password)?
-                                {
-                                    info!("internal verification succeeded");
-                                    internal_verified = true;
-                                } else {
-                                    debug!("internal verification failed");
-                                }
+                if let Some(allowed) = allow_internal_verify_hosts {
+                    debug!("allowed for internal verification: {:?}", allowed);
+                    if let Ok(remote_ip) = env::var("REMOTE_IP") {
+                        debug!("got env variable REMOTE_IP={remote_ip}");
+                        if !remote_ip.is_empty() && allowed.contains(&remote_ip) {
+                            debug!("try internally verificate user credentials");
+                            if InternalVerifyModule::new().credentials_verify(&user, &password)? {
+                                info!("internal verification succeeded");
+                                internal_verified = true;
+                            } else {
+                                debug!("internal verification failed");
                             }
                         }
                     }
                 }
-                Ok(false) => {
-                    debug!("no user data found");
-                }
-                Err(err) => {
-                    warn!("error during credentials_lookup: {err}");
-                }
+            }
+            Ok(false) => {
+                debug!("no user data found");
+            }
+            Err(err) => {
+                warn!("error during credentials_lookup: {err}");
             }
         }
+    }
 
-        if !internal_verified {
-            match verify_mod {
-                Some(module) => {
-                    if !module.credentials_verify(&user, &password)? {
-                        return Err(AuthError::PermFail);
-                    }
-                    info!("verification succeeded");
-                }
-                None => {
-                    return Err(AuthError::TempFail(
-                        "unable to verify credentials, very module not loaded".to_string(),
-                    ));
-                }
-            };
+    if !internal_verified {
+        if !verify_module.credentials_verify(&user, &password)? {
+            return Err(AuthError::PermFail);
         }
-    };
+        info!("verification succeeded");
+    }
 
     reply_bin
-        .call(&user)
+        .call(user)
         .map_err(|err| AuthError::TempFail(format!("unable to call reply_bin: {err}")))
+}
+
+pub fn authenticate(
+    lookup_module: Option<Box<dyn CredentialsLookup>>,
+    verify_module: Option<Box<dyn CredentialsVerify>>,
+    update_module: Option<Box<dyn CredentialsUpdate>>,
+    allow_internal_verify_hosts: Option<Vec<String>>,
+    reply_bin: ReplyBin,
+    fd: Option<i32>,
+) -> AuthResult<Infallible> {
+    let (username, password) = read_credentials_from_fd(fd)?;
+    let user = DovecotUser::new(username);
+
+    match env::var("CREDENTIALS_LOOKUP").unwrap_or_default().as_str() {
+        "1" => match lookup_module {
+            Some(module) => {
+                credentials_lookup(user, module, reply_bin)
+            }
+            None => Err(AuthError::NoUser)
+        },
+        _ => {
+            match verify_module {
+                Some(module) => {
+                    credentials_verify(
+                        user,
+                        password,
+                        lookup_module,
+                        module,
+                        update_module,
+                        reply_bin,
+                        allow_internal_verify_hosts,
+                    )
+                }
+                None => Err(AuthError::TempFail("unable to verify credentials without a very module".to_string()))
+            }
+        }
+    }
 }
