@@ -18,13 +18,15 @@ use log::warn;
 use rand::distributions::Alphanumeric;
 use rand::Rng;
 use sha2::{Digest, Sha512};
+use strum::IntoEnumIterator;
+use strum_macros::EnumIter;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
 /// An implemented hash scheme
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize), serde(tag = "type"))]
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum Scheme {
     SHA512,
     SSHA512,
@@ -66,14 +68,9 @@ impl TryFrom<&str> for Scheme {
     ///
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         let value = value.to_uppercase();
-        if value == Self::SHA512.as_str() || value.starts_with(Self::SHA512.hash_prefix()) {
-            Ok(Self::SHA512)
-        } else if value == Self::SSHA512.as_str() || value.starts_with(Self::SSHA512.hash_prefix())
-        {
-            Ok(Self::SSHA512)
-        } else {
-            Err("unknown hash scheme")
-        }
+        Self::iter()
+            .find(|scheme| value.eq(scheme.as_str()) || value.starts_with(scheme.hash_prefix()))
+            .ok_or("unknown hash scheme")
     }
 }
 
@@ -273,11 +270,11 @@ mod tests {
     fn test_display_and_tryfrom() {
         let ssha512_hash = Hash::new(TEST_PASSWORD, &Scheme::SSHA512);
         let hash_string = ssha512_hash.to_string();
-        assert_eq!(ssha512_hash, Hash::try_from(hash_string.as_str()).unwrap());
+        assert_eq!(Hash::try_from(hash_string.as_str()), Ok(ssha512_hash));
 
         let sha512_hash = Hash::new(TEST_PASSWORD, &Scheme::SHA512);
         let hash_string = sha512_hash.to_string();
-        assert_eq!(sha512_hash, Hash::try_from(hash_string.as_str()).unwrap());
+        assert_eq!(Hash::try_from(hash_string.as_str()), Ok(sha512_hash));
 
         assert_eq!(
             Hash::try_from("{INVALID}HASHDATA"),

@@ -11,6 +11,11 @@
 // You should have received a copy of the GNU General Public License
 // along with dovecot-auth.  If not, see <http://www.gnu.org/licenses/>.
 
+//! Dovecot-Auth is an implementation of the Checkpassword interface which is used by the Dovecot SASL server.
+//!
+//! See <https://doc.dovecot.org/configuration_manual/authentication/checkpassword/> for more information.
+//!
+
 #[cfg(feature = "db")]
 pub mod db;
 
@@ -272,24 +277,28 @@ impl InternalVerifyModule {
     pub fn new() -> Self {
         Self::default()
     }
-}
 
-impl CredentialsVerify for InternalVerifyModule {
-    fn credentials_verify(&mut self, user: &DovecotUser, password: &str) -> AuthResult<bool> {
+    pub fn verify(user: &DovecotUser, password: &str) -> bool {
         match user
             .password
             .as_ref()
             .and_then(|p| Hash::try_from(p.as_str()).ok())
         {
-            Some(hash) => Ok(verify_value(password, &hash)),
-            None => Ok(false),
+            Some(hash) => verify_value(password, &hash),
+            None => false,
         }
+    }
+}
+
+impl CredentialsVerify for InternalVerifyModule {
+    fn credentials_verify(&mut self, user: &DovecotUser, password: &str) -> AuthResult<bool> {
+        Ok(Self::verify(user, password))
     }
 }
 
 /// Represents a credentials lookup module
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize), serde(tag = "type"))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum LookupModule {
     #[cfg(feature = "db")]
     DB(db::DBLookupConfig),
@@ -297,7 +306,7 @@ pub enum LookupModule {
 
 /// Represents a credentials verify module
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize), serde(tag = "type"))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum VerifyModule {
     Internal,
     #[cfg(feature = "http")]
@@ -306,7 +315,7 @@ pub enum VerifyModule {
 
 /// Represents a cached credentials verify module
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize), serde(tag = "type"))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum VerifyCacheModule {
     #[cfg(feature = "db")]
     DB(db::DBCacheVerifyConfig),
@@ -316,7 +325,7 @@ pub enum VerifyCacheModule {
 
 /// Represents an update credentials module
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize), serde(tag = "type"))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum UpdateCredentialsModule {
     #[cfg(feature = "db")]
     DB(db::DBUpdateCredentialsConfig),
@@ -361,7 +370,7 @@ impl ReplyBin {
 /// Returns a tuple containg a username and a password
 ///
 /// Reads credentials from the raw file descriptor optionally given (defaults to 3).
-/// The input is expected to be in this format: username<NUL>password[<NUL>...]
+/// The input is expected to be in this format: &lt;username&gt;NUL&lt;password&gt;[NUL...]
 pub fn read_credentials_from_fd(fd: Option<i32>) -> AuthResult<(String, String)> {
     let fd = fd.unwrap_or(DOVECOT_INPUT_FD);
     let mut f = unsafe { File::from_raw_fd(fd) };
@@ -395,6 +404,30 @@ pub fn credentials_lookup(
         .map_err(|err| AuthError::TempFail(format!("unable to call reply_bin: {err}")))
 }
 
+fn verify_internal_if_allowed(
+    user: &DovecotUser,
+    password: &str,
+    allowed_hosts: &[String],
+) -> bool {
+    let remote_ip = env::var("REMOTE_IP").unwrap_or_default();
+    if remote_ip.is_empty() {
+        return false;
+    }
+
+    debug!("got remote IP from environment variable REMOTE_IP: {remote_ip}");
+    if !allowed_hosts.contains(&remote_ip) {
+        return false;
+    }
+
+    debug!("try to internally verify user credentials");
+    let res = InternalVerifyModule::verify(user, password);
+    match res {
+        true => info!("internal verification succeeded"),
+        false => debug!("internal verification failed"),
+    }
+    res
+}
+
 fn credentials_verify(
     mut user: DovecotUser,
     password: String,
@@ -406,48 +439,31 @@ fn credentials_verify(
 ) -> AuthResult<Infallible> {
     debug!("verify credentials of user {}", user.username);
 
-    let mut internal_verified = false;
-
     if let Some(mut module) = lookup_module {
         debug!("lookup up user data");
         match module.credentials_lookup(&mut user) {
-            Ok(true) => {
-                debug!("got user data: {:?}", user);
-
-                if let Some(module) = update_module {
-                    match module.update_credentials(&user, &password) {
-                        Ok(true) => debug!("successfully updated credentials"),
-                        Ok(false) => debug!("credentials where not updated"),
-                        Err(err) => warn!("unable to update credentials: {err}"),
-                    }
-                }
-
-                if let Some(allowed) = allow_internal_verify_hosts {
-                    debug!("allowed for internal verification: {:?}", allowed);
-                    if let Ok(remote_ip) = env::var("REMOTE_IP") {
-                        debug!("got env variable REMOTE_IP={remote_ip}");
-                        if !remote_ip.is_empty() && allowed.contains(&remote_ip) {
-                            debug!("try internally verificate user credentials");
-                            if InternalVerifyModule::new().credentials_verify(&user, &password)? {
-                                info!("internal verification succeeded");
-                                internal_verified = true;
-                            } else {
-                                debug!("internal verification failed");
-                            }
-                        }
-                    }
-                }
-            }
-            Ok(false) => {
-                debug!("no user data found");
-            }
-            Err(err) => {
-                warn!("error during credentials_lookup: {err}");
-            }
+            Ok(true) => debug!("got user data: {:?}", user),
+            Ok(false) => debug!("no user data found"),
+            Err(err) => warn!("error during credentials_lookup: {err}"),
         }
     }
 
-    if !internal_verified {
+    if let Some(module) = update_module {
+        match module.update_credentials(&user, &password) {
+            Ok(true) => debug!("successfully updated credentials"),
+            Ok(false) => debug!("credentials where not updated"),
+            Err(err) => warn!("unable to update credentials: {err}"),
+        }
+    }
+
+    let verified = !allow_internal_verify_hosts
+        .map(|hosts| {
+            debug!("allowed for internal verification: {:?}", hosts);
+            verify_internal_if_allowed(&user, &password, &hosts)
+        })
+        .unwrap_or_default();
+
+    if !verified {
         if !verify_module.credentials_verify(&user, &password)? {
             return Err(AuthError::PermFail);
         }
@@ -472,26 +488,22 @@ pub fn authenticate(
 
     match env::var("CREDENTIALS_LOOKUP").unwrap_or_default().as_str() {
         "1" => match lookup_module {
-            Some(module) => {
-                credentials_lookup(user, module, reply_bin)
-            }
-            None => Err(AuthError::NoUser)
+            Some(module) => credentials_lookup(user, module, reply_bin),
+            None => Err(AuthError::NoUser),
         },
-        _ => {
-            match verify_module {
-                Some(module) => {
-                    credentials_verify(
-                        user,
-                        password,
-                        lookup_module,
-                        module,
-                        update_module,
-                        reply_bin,
-                        allow_internal_verify_hosts,
-                    )
-                }
-                None => Err(AuthError::TempFail("unable to verify credentials without a very module".to_string()))
-            }
-        }
+        _ => match verify_module {
+            Some(module) => credentials_verify(
+                user,
+                password,
+                lookup_module,
+                module,
+                update_module,
+                reply_bin,
+                allow_internal_verify_hosts,
+            ),
+            None => Err(AuthError::TempFail(
+                "unable to verify credentials without a very module".to_string(),
+            )),
+        },
     }
 }

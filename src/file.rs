@@ -34,7 +34,7 @@ where
     fn load_from_file(file: &File) -> AuthResult<Self> {
         debug!("trying to get shared lock on file {:?}", file);
         file.lock_shared()?;
-        debug!("read and deserialize data");
+        debug!("read file and deserialize content");
         let instance: Self = bincode::deserialize_from(file)
             .map_err(|err| AuthError::TempFail(err.to_string()))?;
         debug!("unlock file");
@@ -47,7 +47,7 @@ where
         file.lock_exclusive()?;
         file.seek(std::io::SeekFrom::Start(0))?;
         file.set_len(0)?;
-        debug!("serialize and write data");
+        debug!("serialize and write data to file");
         bincode::serialize_into(&mut file, self)
             .map_err(|err| AuthError::TempFail(err.to_string()))?;
         debug!("unlock file");

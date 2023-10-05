@@ -26,6 +26,8 @@ clap = { version="*", features=["derive", "cargo"] }
 clap-verbosity-flag = "*"
 log = "*"
 env_logger = "*"
+strum = "*"
+strum_macros = "*"
 
 [features]
 serde = []

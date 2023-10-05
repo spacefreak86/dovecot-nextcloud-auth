@@ -35,7 +35,7 @@ use std::io::prelude::*;
 use std::path::Path;
 use std::time::SystemTime;
 
-const MYNAME: &str = clap::crate_name!();
+const MYNAME: &'static str = clap::crate_name!();
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -187,6 +187,11 @@ where
 }
 
 fn main() {
+    let binary_name = env::current_exe()
+        .ok()
+        .and_then(|e| e.file_name().and_then(|n| n.to_str().map(|s| s.to_owned())))
+        .unwrap_or(String::from(MYNAME));
+
     let args = Args::parse();
 
     env_logger::builder()
@@ -199,7 +204,7 @@ fn main() {
         std::process::exit(0);
     }
 
-    let path = env::var("DOVECOT_AUTH_CONFIG").unwrap_or(format!("/etc/dovecot/{MYNAME}.toml"));
+    let path = env::var("DOVECOT_AUTH_CONFIG").unwrap_or(format!("/etc/{binary_name}.toml"));
     let cache_path = env::var("DOVECOT_AUTH_CONFIG_CACHE").ok();
 
     let config = read_config_file(&path, cache_path).unwrap_or_else(|err| {
@@ -228,7 +233,7 @@ fn main() {
     #[cfg(feature = "db")]
     let conn_pool = config.db_url.as_ref().map(|url| {
         get_conn_pool(url).unwrap_or_else(|err| {
-            error!("unable to parse db_url: {err}");
+            error!("database error: {err}");
             std::process::exit(DOVECOT_TEMPFAIL);
         })
     });
@@ -259,7 +264,7 @@ fn main() {
                 verify_module = Some(Box::new(HttpVerifyModule::new(config)));
             }
             VerifyModule::Internal => {
-                verify_module = Some(Box::new(InternalVerifyModule {}));
+                verify_module = Some(Box::new(InternalVerifyModule::new()));
             }
         };
     };

@@ -1,0 +1,25 @@
+configured = true
+db_url = "mysql://DBUSER:DBPASS@localhost:3306/postfix"
+allow_internal_verify_hosts = []
+
+[lookup_module.DB]
+user_query = "SELECT maildir AS home, CONCAT('maildir:', maildir) as mail, uid, gid, CONCAT('*:bytes=', quota) AS quota_rule, password FROM mailbox WHERE username = :username AND active = '1'"
+
+[verify_module.Http]
+url = "https://localhost/auth"
+method = "GET"
+ok_code = 200
+invalid_code = 401
+
+#[verify_cache_module.DB]
+#db_table = "password_cache"
+#verify_interval = 60
+#max_lifetime = 86400
+#cleanup = true
+#hash_scheme = "SSHA512"
+#allow_expired_on_error = false
+
+[update_credentials_module.DB]
+update_password_query = "UPDATE mailbox SET password = :password WHERE username = :username"
+hash_scheme = "SSHA512"
+

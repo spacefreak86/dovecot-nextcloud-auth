@@ -339,18 +339,15 @@ impl CredentialsUpdate for DBUpdateCredentialsModule {
             return Ok(false);
         }
 
-        let user_pass = match &user.password {
-            Some(password) => password,
-            None => {
-                return Err(AuthError::TempFail("password field not set".to_string()));
-            }
-        };
+        let hash = user.password.as_ref().ok_or_else(|| {
+            AuthError::TempFail("unable to update credentials, password hash not known".to_string())
+        })?;
 
-        if user_pass.starts_with(self.config.hash_scheme.hash_prefix()) {
+        if hash.starts_with(self.config.hash_scheme.hash_prefix()) {
             return Ok(false);
         }
 
-        if !InternalVerifyModule::new().credentials_verify(user, password)? {
+        if !InternalVerifyModule::verify(user, password) {
             return Ok(false);
         }
 
