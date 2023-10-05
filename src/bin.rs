@@ -21,8 +21,8 @@ use dovecot_auth::http::*;
 
 use dovecot_auth::{authenticate, AuthError, AuthResult, ReplyBin, DOVECOT_TEMPFAIL};
 use dovecot_auth::{
-    CredentialsLookup, CredentialsUpdate, CredentialsVerify, InternalVerifyModule, LookupModule,
-    UpdateCredentialsModule, VerifyCacheModule, VerifyModule,
+    CredentialsLookup, PostLookup, CredentialsVerify, InternalVerifyModule, LookupModule,
+    PostLookupModule, VerifyCacheModule, VerifyModule,
 };
 
 use clap::Parser;
@@ -43,9 +43,9 @@ pub struct Config {
     #[cfg(feature = "db")]
     db_url: Option<String>,
     lookup_module: Option<LookupModule>,
+    post_lookup_module: Option<PostLookupModule>,
     verify_module: Option<VerifyModule>,
     verify_cache_module: Option<VerifyCacheModule>,
-    update_credentials_module: Option<UpdateCredentialsModule>,
     allow_internal_verify_hosts: Option<Vec<String>>,
 }
 
@@ -55,6 +55,13 @@ impl Default for Config {
         let lookup_module = Some(LookupModule::DB(DBLookupConfig::default()));
         #[cfg(not(feature = "db"))]
         let lookup_module: Option<LookupModule> = None;
+
+        #[cfg(feature = "db")]
+        let post_lookup_module = Some(PostLookupModule::DBUpdateCredentials(
+            DBUpdateCredentialsConfig::default(),
+        ));
+        #[cfg(not(feature = "db"))]
+        let post_lookup_module: Option<PostLookupModule> = None;
 
         #[cfg(feature = "http")]
         let verify_module = Some(VerifyModule::Http(HttpVerifyConfig::default()));
@@ -67,21 +74,14 @@ impl Default for Config {
         let verify_cache_module: Option<VerifyCacheModule> =
             Some(VerifyCacheModule::File(FileCacheVerifyConfig::default()));
 
-        #[cfg(feature = "db")]
-        let update_credentials_module = Some(UpdateCredentialsModule::DB(
-            DBUpdateCredentialsConfig::default(),
-        ));
-        #[cfg(not(feature = "db"))]
-        let update_credentials_module: Option<UpdateCredentialsModule> = None;
-
         Self {
             configured: false,
             #[cfg(feature = "db")]
             db_url: Some(String::from("mysql://DBUSER:DBPASS@localhost:3306/postfix")),
             lookup_module,
+            post_lookup_module,
             verify_module,
             verify_cache_module,
-            update_credentials_module,
             allow_internal_verify_hosts: Some(vec![]),
         }
     }
@@ -256,6 +256,22 @@ fn main() {
         };
     };
 
+    let mut post_lookup_module: Option<Box<dyn PostLookup>> = None;
+    if let Some(module) = config.post_lookup_module {
+        match module {
+            #[cfg(feature = "db")]
+            PostLookupModule::DBUpdateCredentials(config) => match conn_pool.as_ref().cloned() {
+                Some(pool) => {
+                    post_lookup_module = Some(Box::new(DBUpdateCredentialsModule::new(config, pool)));
+                }
+                None => {
+                    error!("config option db_url not set (needed by update_credentials_module)");
+                    std::process::exit(DOVECOT_TEMPFAIL);
+                }
+            },
+        };
+    };
+
     let mut verify_module: Option<Box<dyn CredentialsVerify>> = None;
     if let Some(module) = config.verify_module {
         match module {
@@ -290,26 +306,10 @@ fn main() {
         }
     };
 
-    let mut update_module: Option<Box<dyn CredentialsUpdate>> = None;
-    if let Some(module) = config.update_credentials_module {
-        match module {
-            #[cfg(feature = "db")]
-            UpdateCredentialsModule::DB(config) => match conn_pool.as_ref().cloned() {
-                Some(pool) => {
-                    update_module = Some(Box::new(DBUpdateCredentialsModule::new(config, pool)));
-                }
-                None => {
-                    error!("config option db_url not set (needed by update_credentials_module)");
-                    std::process::exit(DOVECOT_TEMPFAIL);
-                }
-            },
-        };
-    };
-
     let rc = match authenticate(
         lookup_module,
+        post_lookup_module,
         verify_module,
-        update_module,
         config.allow_internal_verify_hosts,
         reply_bin,
         fd,

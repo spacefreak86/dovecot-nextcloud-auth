@@ -159,22 +159,22 @@ impl DovecotUser {
     }
 }
 
-/// Trait which defines credentials lookup modules used by the authenticate function
+/// Trait which defines credentials lookup modules
 pub trait CredentialsLookup {
     fn credentials_lookup(&mut self, user: &mut DovecotUser) -> AuthResult<bool>;
 }
 
-/// Trait which defines credentials verify modules used by the authenticate function
+/// Trait which defines post lookup modules
+pub trait PostLookup {
+    fn post_lookup(&mut self, user: &mut DovecotUser, password: &str) -> AuthResult<()>;
+}
+
+/// Trait which defines credentials verify modules
 pub trait CredentialsVerify {
     fn credentials_verify(&mut self, user: &DovecotUser, password: &str) -> AuthResult<bool>;
 }
 
-/// Trait which defines update credentials modules used by the authenticate function
-pub trait CredentialsUpdate {
-    fn update_credentials(&self, user: &DovecotUser, password: &str) -> AuthResult<bool>;
-}
-
-/// Trait which defines cached credentials verify modules used by the authenticate function
+/// Trait which defines cached credentials verify modules
 pub trait CredentialsVerifyCache: CredentialsVerify {
     // Return the hash of the password given
     fn hash(&self, password: &str) -> Hash;
@@ -304,6 +304,14 @@ pub enum LookupModule {
     DB(db::DBLookupConfig),
 }
 
+/// Represents a post lookup credentials module
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub enum PostLookupModule {
+    #[cfg(feature = "db")]
+    DBUpdateCredentials(db::DBUpdateCredentialsConfig),
+}
+
 /// Represents a credentials verify module
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -321,14 +329,6 @@ pub enum VerifyCacheModule {
     DB(db::DBCacheVerifyConfig),
     #[cfg(feature = "serde")]
     File(file::FileCacheVerifyConfig),
-}
-
-/// Represents an update credentials module
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub enum UpdateCredentialsModule {
-    #[cfg(feature = "db")]
-    DB(db::DBUpdateCredentialsConfig),
 }
 
 /// Represents the path to a reply binary and arguments to call it with
@@ -433,7 +433,7 @@ fn credentials_verify(
     password: String,
     lookup_module: Option<Box<dyn CredentialsLookup>>,
     mut verify_module: Box<dyn CredentialsVerify>,
-    update_module: Option<Box<dyn CredentialsUpdate>>,
+    post_lookup_module: Option<Box<dyn PostLookup>>,
     reply_bin: ReplyBin,
     allow_internal_verify_hosts: Option<Vec<String>>,
 ) -> AuthResult<Infallible> {
@@ -448,12 +448,10 @@ fn credentials_verify(
         }
     }
 
-    if let Some(module) = update_module {
-        match module.update_credentials(&user, &password) {
-            Ok(true) => debug!("successfully updated credentials"),
-            Ok(false) => debug!("credentials where not updated"),
-            Err(err) => warn!("unable to update credentials: {err}"),
-        }
+    if let Some(mut module) = post_lookup_module {
+        module.post_lookup(&mut user, &password).unwrap_or_else(|err| {
+            warn!("error in post lookup module: {err}");
+        });
     }
 
     let verified = !allow_internal_verify_hosts
@@ -477,8 +475,8 @@ fn credentials_verify(
 
 pub fn authenticate(
     lookup_module: Option<Box<dyn CredentialsLookup>>,
+    post_lookup_module: Option<Box<dyn PostLookup>>,
     verify_module: Option<Box<dyn CredentialsVerify>>,
-    update_module: Option<Box<dyn CredentialsUpdate>>,
     allow_internal_verify_hosts: Option<Vec<String>>,
     reply_bin: ReplyBin,
     fd: Option<i32>,
@@ -497,7 +495,7 @@ pub fn authenticate(
                 password,
                 lookup_module,
                 module,
-                update_module,
+                post_lookup_module,
                 reply_bin,
                 allow_internal_verify_hosts,
             ),

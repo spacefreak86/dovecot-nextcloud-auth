@@ -13,7 +13,7 @@
 
 use crate::hashlib::{Hash, Scheme};
 use crate::{
-    AuthError, AuthResult, CredentialsLookup, CredentialsUpdate, CredentialsVerify,
+    AuthError, AuthResult, CredentialsLookup, PostLookup, CredentialsVerify,
     CredentialsVerifyCache, DovecotUser, InternalVerifyModule,
 };
 
@@ -333,22 +333,22 @@ impl DBUpdateCredentialsModule {
     }
 }
 
-impl CredentialsUpdate for DBUpdateCredentialsModule {
-    fn update_credentials(&self, user: &DovecotUser, password: &str) -> AuthResult<bool> {
+impl PostLookup for DBUpdateCredentialsModule {
+    fn post_lookup(&mut self, user: &mut DovecotUser, password: &str) -> AuthResult<()> {
         if !self.config.update_password_query.is_empty() {
-            return Ok(false);
+            return Ok(());
         }
 
         let hash = user.password.as_ref().ok_or_else(|| {
-            AuthError::TempFail("unable to update credentials, password hash not known".to_string())
+            AuthError::TempFail("unable to update credentials, lookup did not return password hash".to_string())
         })?;
 
         if hash.starts_with(self.config.hash_scheme.hash_prefix()) {
-            return Ok(false);
+            return Ok(());
         }
 
         if !InternalVerifyModule::verify(user, password) {
-            return Ok(false);
+            return Ok(());
         }
 
         let hash = Hash::new(password, &self.config.hash_scheme);
@@ -358,7 +358,8 @@ impl CredentialsUpdate for DBUpdateCredentialsModule {
             &self.conn_pool,
             &self.config.update_password_query,
         )?;
+        user.password = Some(hash.to_string());
 
-        Ok(true)
+        Ok(())
     }
 }
