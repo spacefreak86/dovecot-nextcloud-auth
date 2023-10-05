@@ -209,14 +209,14 @@ pub trait CredentialsVerifyCache: CredentialsVerify {
                 Default::default()
             });
         debug!("verified hashes: {:?}", verified_hashes);
-        debug!("try to verify credentials against cached verified hashes");
+        debug!("try to verify password against cached verified hashes");
         if find_hash(password, &verified_hashes).is_some() {
-            debug!("verified against cached verified hash successfully");
+            debug!("verification against cached verified hash succeeded");
             return Ok(true);
         }
 
         let expired_hash = find_hash(password, &expired_hashes).cloned();
-        debug!("verify credentials with verification module");
+        debug!("verify credentials by credentials verify module");
         let res = match self.module().credentials_verify(user, password) {
             Ok(true) => {
                 debug!("verification succeeded, insert hash into cache");
@@ -236,8 +236,8 @@ pub trait CredentialsVerifyCache: CredentialsVerify {
             }
             Err(err) => match self.allow_expired_on_error() {
                 true => {
-                    warn!("verification module failed: {err}");
-                    warn!("try to verify against expired hashes");
+                    warn!("credentials verify module failed: {err}");
+                    warn!("try to verify password against expired hashes");
                     match expired_hash {
                         Some(_) => {
                             debug!("verification against expired hashes succeeded");
