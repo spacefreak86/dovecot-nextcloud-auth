@@ -440,9 +440,8 @@ fn credentials_verify(
     debug!("verify credentials of user {}", user.username);
 
     if let Some(mut module) = lookup_module {
-        debug!("lookup up user data");
         match module.credentials_lookup(&mut user) {
-            Ok(true) => debug!("got user data: {:?}", user),
+            Ok(true) => (),
             Ok(false) => debug!("no user data found"),
             Err(err) => warn!("error during credentials_lookup: {err}"),
         }
@@ -454,19 +453,19 @@ fn credentials_verify(
         });
     }
 
-    let verified = !allow_internal_verify_hosts
-        .map(|hosts| {
+    let verified = match allow_internal_verify_hosts {
+        Some(hosts) => {
             debug!("allowed for internal verification: {:?}", hosts);
             verify_internal_if_allowed(&user, &password, &hosts)
-        })
-        .unwrap_or_default();
-
-    if !verified {
-        if !verify_module.credentials_verify(&user, &password)? {
-            return Err(AuthError::PermFail);
         }
-        info!("verification succeeded");
+        None => false,
+    };
+
+    if !verified && !verify_module.credentials_verify(&user, &password)? {
+        return Err(AuthError::PermFail);
     }
+
+    info!("verification succeeded, call reply_bin");
 
     reply_bin
         .call(user)
@@ -487,7 +486,9 @@ pub fn authenticate(
     match env::var("CREDENTIALS_LOOKUP").unwrap_or_default().as_str() {
         "1" => match lookup_module {
             Some(module) => credentials_lookup(user, module, reply_bin),
-            None => Err(AuthError::NoUser),
+            None => Err(AuthError::TempFail(
+                "unable to lookup credentials without a lookup module".to_string(),
+            )),
         },
         _ => match verify_module {
             Some(module) => credentials_verify(
