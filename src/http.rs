@@ -51,7 +51,7 @@ impl HttpVerifyModule {
 }
 
 impl CredentialsVerify for HttpVerifyModule {
-    fn credentials_verify(&mut self, user: &DovecotUser, password: &str) -> AuthResult<bool> {
+    fn credentials_verify(&mut self, user: &DovecotUser, password: &str) -> AuthResult<()> {
         let username = encode(&user.username);
         let url = self.config.url.replace("::USERNAME::", &username);
 
@@ -64,7 +64,7 @@ impl CredentialsVerify for HttpVerifyModule {
             Ok(res) => {
                 let code = res.status();
                 if code == self.config.ok_code {
-                    Ok(true)
+                    Ok(())
                 } else {
                     Err(AuthError::TempFail(format!(
                         "unexpected http response: {code} {}",
@@ -74,7 +74,7 @@ impl CredentialsVerify for HttpVerifyModule {
             }
             Err(ureq::Error::Status(code, res)) => {
                 if code == self.config.invalid_code {
-                    Ok(false)
+                    Err(AuthError::PermFail)
                 } else {
                     Err(AuthError::TempFail(format!(
                         "unexpected http error response: {code} {}",

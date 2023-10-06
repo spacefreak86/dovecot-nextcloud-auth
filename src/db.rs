@@ -13,8 +13,8 @@
 
 use crate::hashlib::{Hash, Scheme};
 use crate::{
-    AuthError, AuthResult, CredentialsLookup, PostLookup, CredentialsVerify,
-    CredentialsVerifyCache, DovecotUser, InternalVerifyModule,
+    AuthError, AuthResult, CredentialsLookup, CredentialsVerify, CredentialsVerifyCache,
+    DovecotUser, InternalVerifyModule, PostLookup,
 };
 
 use mysql::prelude::*;
@@ -177,8 +177,11 @@ impl DBLookupModule {
 }
 
 impl CredentialsLookup for DBLookupModule {
-    fn credentials_lookup(&mut self, user: &mut DovecotUser) -> AuthResult<bool> {
-        Ok(get_user(user, &self.conn_pool, &self.config.user_query)?)
+    fn credentials_lookup(&mut self, user: &mut DovecotUser) -> AuthResult<()> {
+        match get_user(user, &self.conn_pool, &self.config.user_query)? {
+            true => Ok(()),
+            false => Err(AuthError::NoUser),
+        }
     }
 }
 
@@ -340,7 +343,9 @@ impl PostLookup for DBUpdateCredentialsModule {
         }
 
         let hash = user.password.as_ref().ok_or_else(|| {
-            AuthError::TempFail("unable to update credentials, lookup did not return password hash".to_string())
+            AuthError::TempFail(
+                "unable to update credentials, lookup did not return password hash".to_string(),
+            )
         })?;
 
         if hash.starts_with(self.config.hash_scheme.hash_prefix()) {
