@@ -21,7 +21,7 @@ use dovecot_auth::http::*;
 
 use dovecot_auth::{authenticate, AuthError, AuthResult, ReplyBin, DOVECOT_TEMPFAIL};
 use dovecot_auth::{
-    CredentialsLookup, PostLookup, CredentialsVerify, InternalVerifyModule, LookupModule,
+    CredentialsLookup, CredentialsVerify, InternalVerifyModule, LookupModule, PostLookup,
     PostLookupModule, VerifyCacheModule, VerifyModule,
 };
 
@@ -37,7 +37,7 @@ use std::time::SystemTime;
 
 const MYNAME: &'static str = clap::crate_name!();
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Config {
     configured: bool,
     #[cfg(feature = "db")]
@@ -262,7 +262,8 @@ fn main() {
             #[cfg(feature = "db")]
             PostLookupModule::DBUpdateCredentials(config) => match conn_pool.as_ref().cloned() {
                 Some(pool) => {
-                    post_lookup_module = Some(Box::new(DBUpdateCredentialsModule::new(config, pool)));
+                    post_lookup_module =
+                        Some(Box::new(DBUpdateCredentialsModule::new(config, pool)));
                 }
                 None => {
                     error!("config option db_url not set (needed by update_credentials_module)");
@@ -329,4 +330,18 @@ fn main() {
     };
 
     std::process::exit(rc);
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::Config;
+    use bincode;
+
+    #[test]
+    fn config_bincode_serde() {
+        let config = Config::default();
+        let data = bincode::serialize(&config).unwrap_or_default();
+        let new_config = bincode::deserialize::<Config>(&data).ok();
+        assert_eq!(new_config, Some(config));
+    }
 }

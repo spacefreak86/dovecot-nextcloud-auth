@@ -296,7 +296,7 @@ impl CredentialsVerify for InternalVerifyModule {
 }
 
 /// Represents a credentials lookup module
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum LookupModule {
     #[cfg(feature = "db")]
@@ -304,7 +304,7 @@ pub enum LookupModule {
 }
 
 /// Represents a post lookup credentials module
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum PostLookupModule {
     #[cfg(feature = "db")]
@@ -312,7 +312,7 @@ pub enum PostLookupModule {
 }
 
 /// Represents a credentials verify module
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum VerifyModule {
     Internal,
@@ -321,7 +321,7 @@ pub enum VerifyModule {
 }
 
 /// Represents a cached credentials verify module
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum VerifyCacheModule {
     #[cfg(feature = "db")]

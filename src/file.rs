@@ -58,7 +58,7 @@ where
 
 impl<T> BinaryCacheFile for T where T: Serialize + DeserializeOwned {}
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct FileCacheVerifyConfig {
     pub cache_file: Option<String>,
     pub verify_interval: u64,

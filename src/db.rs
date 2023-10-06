@@ -149,7 +149,7 @@ fn delete_dead_hashes(max_lifetime: u64, pool: &Pool, cache_table: &str) -> Resu
     Ok(conn.exec_drop(&stmt, params! { "max_lifetime" => max_lifetime })?)
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct DBLookupConfig {
     pub user_query: String,
@@ -185,7 +185,7 @@ impl CredentialsLookup for DBLookupModule {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct DBCacheVerifyConfig {
     pub db_table: String,
@@ -306,7 +306,7 @@ impl CredentialsVerifyCache for DBCacheVerifyModule {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct DBUpdateCredentialsConfig {
     pub update_password_query: String,
