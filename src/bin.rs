@@ -99,20 +99,22 @@ impl Default for Config {
     }
 }
 
-fn parse_config_file(config_file: File, cache_file: Option<File>) -> AuthResult<Config> {
+fn parse_and_cache_config(config_file: File, cache_file: File) -> AuthResult<Config> {
     let config = Config::deserialize_from(config_file)?;
-    if let Some(file) = cache_file {
-        debug!("save config to cache file {:?}", file);
-        config.save_to_file(file).unwrap_or_else(|err| {
-            warn!("unable to write config cache file: {err}");
-        });
-    }
+    debug!("save config to cache file {:?}", cache_file);
+    config.save_to_file(cache_file).unwrap_or_else(|err| {
+        warn!("unable to write config cache file: {err}");
+    });
     Ok(config)
 }
 
 fn get_modified(file: &File) -> AuthResult<SystemTime> {
     Ok(file.metadata()?.modified()?)
 }
+
+
+
+
 
 fn read_config_file<P, C>(config_path: P, cache_path: Option<C>) -> AuthResult<Config>
 where
@@ -135,32 +137,33 @@ where
 
     let config = match config_cache_file.take() {
         Some(cache_file) => {
-            debug!("got config cache file {:?}, determining age", cache_file);
-            let cache_modified = get_modified(&cache_file).unwrap_or(SystemTime::UNIX_EPOCH);
+            debug!("config cache file {:?}", cache_file);
             let config_modified = get_modified(&config_file).unwrap_or(SystemTime::now());
             debug!("config file last modified: {:?}", config_modified);
-            debug!("cache file last modified: {:?}", cache_modified);
+            let cache_modified = get_modified(&cache_file).unwrap_or(SystemTime::UNIX_EPOCH);
+            debug!("config cache file last modified: {:?}", cache_modified);
+
             match config_modified.duration_since(cache_modified) {
                 Ok(duration) => {
                     debug!(
-                        "cache file is {}s older than config file, update cache",
+                        "cache file is {}s older than config file, refresh cache",
                         duration.as_secs()
                     );
-                    parse_config_file(config_file, Some(cache_file))?
+                    parse_and_cache_config(config_file, cache_file)?
                 }
                 Err(_) => match cache_file.allocated_size() {
-                    Ok(0) => parse_config_file(config_file, Some(cache_file))?,
+                    Ok(0) => parse_and_cache_config(config_file, cache_file)?,
                     _ => match Config::load_from_file(&cache_file) {
                         Ok(config) => config,
                         Err(err) => {
                             debug!("unable to load config cache file: {err}");
-                            parse_config_file(config_file, Some(cache_file))?
+                            parse_and_cache_config(config_file, cache_file)?
                         }
                     },
                 },
             }
         }
-        None => parse_config_file(config_file, None)?,
+        None => Config::deserialize_from(config_file)?,
     };
     Ok(config)
 }

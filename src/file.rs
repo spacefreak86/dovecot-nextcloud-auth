@@ -32,7 +32,7 @@ where
     Self: Serialize + DeserializeOwned,
 {
     fn load_from_file(file: &File) -> AuthResult<Self> {
-        debug!("trying to get shared lock on file {:?}", file);
+        debug!("trying to get shared lock on {:?}", file);
         file.lock_shared()?;
         debug!("read file and deserialize content");
         let instance: Self =
@@ -43,7 +43,7 @@ where
     }
 
     fn save_to_file(&self, mut file: File) -> AuthResult<()> {
-        debug!("trying to get exclusive lock on file {:?}", file);
+        debug!("trying to get exclusive lock on {:?}", file);
         file.lock_exclusive()?;
         file.seek(std::io::SeekFrom::Start(0))?;
         file.set_len(0)?;

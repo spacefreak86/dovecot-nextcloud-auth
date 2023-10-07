@@ -391,7 +391,7 @@ pub fn credentials_lookup(
 ) -> AuthResult<()> {
     debug!("credentials lookup, user {}", user.username);
     module.credentials_lookup(user)?;
-    debug!("credentials lookup succeeded data: {:?}", user);
+    debug!("credentials lookup succeeded: {:?}", user);
     if env::var("AUTHORIZED").unwrap_or_default() == "1" {
         env::set_var("AUTHORIZED", "2");
     }
@@ -416,7 +416,7 @@ fn verify_internal_if_allowed(
     debug!("try to internally verify user credentials");
     let res = InternalVerifyModule::verify(user, password);
     match res {
-        true => info!("internal verification succeeded"),
+        true => debug!("internal verification succeeded"),
         false => debug!("internal verification failed"),
     }
     res
