@@ -11,18 +11,18 @@
 // You should have received a copy of the GNU General Public License
 // along with dovecot-auth.  If not, see <http://www.gnu.org/licenses/>.
 
+use crate::hashlib::{Hash, Scheme};
 use crate::{AuthError, AuthResult, CredentialsVerify, CredentialsVerifyCache};
-use crate::hashlib::{Scheme, Hash};
 
 use bincode;
 use fs2::FileExt;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use log::{debug, warn};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Seek;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::prelude::OpenOptionsExt;
 use std::time::SystemTime;
 
 const DEFAULT_VERIFY_CACHE_FILE: &str = "/tmp/dovecot-auth-verify.cache";
@@ -35,8 +35,8 @@ where
         debug!("trying to get shared lock on file {:?}", file);
         file.lock_shared()?;
         debug!("read file and deserialize content");
-        let instance: Self = bincode::deserialize_from(file)
-            .map_err(|err| AuthError::TempFail(err.to_string()))?;
+        let instance: Self =
+            bincode::deserialize_from(file).map_err(|err| AuthError::TempFail(err.to_string()))?;
         debug!("unlock file");
         file.unlock()?;
         Ok(instance)
@@ -103,12 +103,10 @@ impl FileCacheVerifyModule {
             .cloned()
             .unwrap_or(DEFAULT_VERIFY_CACHE_FILE.to_string());
         let cache = match File::open(&cache_file) {
-            Ok(file) => {
-                Cache::load_from_file(&file).unwrap_or_else(|err| {
-                    warn!("unable to deserialize cache: {err}");
-                    Default::default()
-                })
-            }
+            Ok(file) => Cache::load_from_file(&file).unwrap_or_else(|err| {
+                warn!("unable to deserialize cache: {err}");
+                Default::default()
+            }),
             Err(err) => {
                 debug!("unable to load cache file: {err}");
                 Default::default()
@@ -214,16 +212,8 @@ impl CredentialsVerifyCache for FileCacheVerifyModule {
 
     fn save(&self) -> AuthResult<()> {
         if self.changed {
-            match File::options().write(true).open(&self.cache_file) {
-                Ok(file) => self.cache.save_to_file(file)?,
-                Err(_) => {
-                    let file = File::create(&self.cache_file)?;
-                    if let Ok(metadata) = file.metadata() {
-                        metadata.permissions().set_mode(0o600);
-                    }
-                    self.cache.save_to_file(file)?
-                }
-            };
+            let file = File::options().write(true).create(true).mode(0o622).open(&self.cache_file)?;
+            self.cache.save_to_file(file)?;
         }
         Ok(())
     }

@@ -27,11 +27,13 @@ use dovecot_auth::{
 
 use clap::Parser;
 use clap_verbosity_flag::{Verbosity, WarnLevel};
+use fs2::FileExt;
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs::File;
-use std::io::prelude::*;
+use std::io::Read;
+use std::os::unix::prelude::OpenOptionsExt;
 use std::path::Path;
 use std::time::SystemTime;
 
@@ -47,6 +49,16 @@ pub struct Config {
     verify_module: Option<VerifyModule>,
     verify_cache_module: Option<VerifyCacheModule>,
     allow_internal_verify_hosts: Option<Vec<String>>,
+}
+
+impl Config {
+    pub fn deserialize_from<T: Read>(mut reader: T) -> AuthResult<Self> {
+        debug!("read and parse config file");
+        let mut content = String::new();
+        reader.read_to_string(&mut content)?;
+        let config: Config = toml::from_str(&content)?;
+        Ok(config)
+    }
 }
 
 impl Default for Config {
@@ -87,10 +99,70 @@ impl Default for Config {
     }
 }
 
-fn print_example_config() {
-    let config = Config::default();
-    let toml = toml::to_string_pretty(&config).expect("that we can render the default config");
-    println!("{toml}");
+fn parse_config_file(config_file: File, cache_file: Option<File>) -> AuthResult<Config> {
+    let config = Config::deserialize_from(config_file)?;
+    if let Some(file) = cache_file {
+        debug!("save config to cache file {:?}", file);
+        config.save_to_file(file).unwrap_or_else(|err| {
+            warn!("unable to write config cache file: {err}");
+        });
+    }
+    Ok(config)
+}
+
+fn get_modified(file: &File) -> AuthResult<SystemTime> {
+    Ok(file.metadata()?.modified()?)
+}
+
+fn read_config_file<P, C>(config_path: P, cache_path: Option<C>) -> AuthResult<Config>
+where
+    P: AsRef<Path>,
+    C: AsRef<Path>,
+{
+    let config_file = File::open(config_path)?;
+    let mut config_cache_file = cache_path
+        .as_ref()
+        .map(|path| {
+            File::options()
+                .read(true)
+                .write(true)
+                .create(true)
+                .mode(0o622)
+                .open(path)
+                .ok()
+        })
+        .flatten();
+
+    let config = match config_cache_file.take() {
+        Some(cache_file) => {
+            debug!("got config cache file {:?}, determining age", cache_file);
+            let cache_modified = get_modified(&cache_file).unwrap_or(SystemTime::UNIX_EPOCH);
+            let config_modified = get_modified(&config_file).unwrap_or(SystemTime::now());
+            debug!("config file last modified: {:?}", config_modified);
+            debug!("cache file last modified: {:?}", cache_modified);
+            match config_modified.duration_since(cache_modified) {
+                Ok(duration) => {
+                    debug!(
+                        "cache file is {}s older than config file, update cache",
+                        duration.as_secs()
+                    );
+                    parse_config_file(config_file, Some(cache_file))?
+                }
+                Err(_) => match cache_file.allocated_size() {
+                    Ok(0) => parse_config_file(config_file, Some(cache_file))?,
+                    _ => match Config::load_from_file(&cache_file) {
+                        Ok(config) => config,
+                        Err(err) => {
+                            debug!("unable to load config cache file: {err}");
+                            parse_config_file(config_file, Some(cache_file))?
+                        }
+                    },
+                },
+            }
+        }
+        None => parse_config_file(config_file, None)?,
+    };
+    Ok(config)
 }
 
 #[derive(Parser, Debug)]
@@ -116,76 +188,6 @@ struct Args {
     args: Option<Vec<String>>,
 }
 
-fn parse_config_file(mut config_file: File, cache_file: Option<File>) -> AuthResult<Config> {
-    let mut content = String::new();
-    debug!("parse config file {:?}", config_file);
-    config_file.read_to_string(&mut content)?;
-    let config: Config = toml::from_str(&content)?;
-    if let Some(file) = cache_file {
-        debug!("save config to cache file {:?}", file);
-        config.save_to_file(file).unwrap_or_else(|err| {
-            warn!("unable to write config cache file: {err}");
-        });
-    }
-    Ok(config)
-}
-
-fn get_modified(file: &File) -> AuthResult<SystemTime> {
-    Ok(file.metadata()?.modified()?)
-}
-
-fn read_config_file<P, C>(config_path: P, cache_path: Option<C>) -> AuthResult<Config>
-where
-    P: AsRef<Path>,
-    C: AsRef<Path>,
-{
-    let config_file = File::open(config_path)?;
-    let mut opt_cache_file = cache_path
-        .as_ref()
-        .map(|path| File::options().read(true).write(true).open(path).ok())
-        .flatten();
-
-    let config = match opt_cache_file.take() {
-        Some(cache_file) => {
-            debug!("got config cache file {:?}, determining age", cache_file);
-            let cache_modified = get_modified(&cache_file).unwrap_or(SystemTime::UNIX_EPOCH);
-            let config_modified = get_modified(&config_file).unwrap_or(SystemTime::now());
-            debug!("config file last modified: {:?}", config_modified);
-            debug!("cache file last modified: {:?}", cache_modified);
-            match config_modified.duration_since(cache_modified) {
-                Ok(duration) => {
-                    debug!(
-                        "cache file is {} older thand conf file, refresh",
-                        duration.as_secs()
-                    );
-                    parse_config_file(config_file, Some(cache_file))?
-                }
-                Err(_) => match Config::load_from_file(&cache_file) {
-                    Ok(config) => config,
-                    Err(err) => {
-                        debug!("unable to load config cache file: {err}");
-                        parse_config_file(config_file, Some(cache_file))?
-                    }
-                },
-            }
-        }
-        None => {
-            let cache_file = match cache_path {
-                Some(path) => match File::create(path) {
-                    Ok(file) => Some(file),
-                    Err(err) => {
-                        warn!("unable to create config cache file: {err}");
-                        None
-                    }
-                },
-                None => None,
-            };
-            parse_config_file(config_file, cache_file)?
-        }
-    };
-    Ok(config)
-}
-
 fn main() {
     let binary_name = env::current_exe()
         .ok()
@@ -200,7 +202,10 @@ fn main() {
         .init();
 
     if args.print_example_config {
-        print_example_config();
+        match toml::to_string_pretty(&Config::default()) {
+            Ok(toml) => println!("{toml}"),
+            Err(err) => eprintln!("unable to serialize default config: {err}")
+        };
         std::process::exit(0);
     }
 
