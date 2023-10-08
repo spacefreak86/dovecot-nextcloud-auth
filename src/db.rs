@@ -177,7 +177,7 @@ impl DBLookupModule {
 }
 
 impl CredentialsLookup for DBLookupModule {
-    fn credentials_lookup(&mut self, user: &mut DovecotUser) -> AuthResult<()> {
+    fn lookup(&mut self, user: &mut DovecotUser) -> AuthResult<()> {
         match get_user(user, &self.conn_pool, &self.config.user_query)? {
             true => Ok(()),
             false => Err(AuthError::NoUser),

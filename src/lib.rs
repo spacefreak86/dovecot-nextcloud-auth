@@ -161,7 +161,7 @@ impl DovecotUser {
 
 /// Trait which defines credentials lookup modules
 pub trait CredentialsLookup {
-    fn credentials_lookup(&mut self, user: &mut DovecotUser) -> AuthResult<()>;
+    fn lookup(&mut self, user: &mut DovecotUser) -> AuthResult<()>;
 }
 
 /// Trait which defines post lookup modules
@@ -171,7 +171,7 @@ pub trait PostLookup {
 
 /// Trait which defines credentials verify modules
 pub trait CredentialsVerify {
-    fn credentials_verify(&mut self, user: &DovecotUser, password: &str) -> AuthResult<()>;
+    fn verify(&mut self, user: &DovecotUser, password: &str) -> AuthResult<()>;
 }
 
 /// Trait which defines cached credentials verify modules
@@ -213,7 +213,7 @@ pub trait CredentialsVerifyCache: CredentialsVerify {
 
         let expired_hash = find_hash(password, &expired_hashes).cloned();
         debug!("verify credentials by credentials verify module");
-        let res = match self.module().credentials_verify(user, password) {
+        let res = match self.module().verify(user, password) {
             Ok(()) => {
                 debug!("verification succeeded, insert hash into cache");
                 let hash = expired_hash.unwrap_or_else(|| self.hash(password));
@@ -258,7 +258,7 @@ pub trait CredentialsVerifyCache: CredentialsVerify {
 }
 
 impl<T: CredentialsVerifyCache> CredentialsVerify for T {
-    fn credentials_verify(&mut self, user: &DovecotUser, password: &str) -> AuthResult<()> {
+    fn verify(&mut self, user: &DovecotUser, password: &str) -> AuthResult<()> {
         self.cached_credentials_verify(user, password)
     }
 }
@@ -287,7 +287,7 @@ impl InternalVerifyModule {
 }
 
 impl CredentialsVerify for InternalVerifyModule {
-    fn credentials_verify(&mut self, user: &DovecotUser, password: &str) -> AuthResult<()> {
+    fn verify(&mut self, user: &DovecotUser, password: &str) -> AuthResult<()> {
         match Self::verify(user, password) {
             true => Ok(()),
             false => Err(AuthError::PermFail),
@@ -390,7 +390,7 @@ pub fn credentials_lookup(
     mut module: Box<dyn CredentialsLookup>,
 ) -> AuthResult<()> {
     debug!("credentials lookup, user {}", user.username);
-    module.credentials_lookup(user)?;
+    module.lookup(user)?;
     debug!("credentials lookup succeeded: {:?}", user);
     if env::var("AUTHORIZED").unwrap_or_default() == "1" {
         env::set_var("AUTHORIZED", "2");
@@ -439,7 +439,7 @@ fn credentials_verify(
     };
 
     if !verified {
-        verify_module.credentials_verify(user, &password)?;
+        verify_module.verify(user, &password)?;
     }
     info!("credentials verify succeeded");
     Ok(())

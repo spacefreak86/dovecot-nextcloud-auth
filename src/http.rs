@@ -51,7 +51,7 @@ impl HttpVerifyModule {
 }
 
 impl CredentialsVerify for HttpVerifyModule {
-    fn credentials_verify(&mut self, user: &DovecotUser, password: &str) -> AuthResult<()> {
+    fn verify(&mut self, user: &DovecotUser, password: &str) -> AuthResult<()> {
         let username = encode(&user.username);
         let url = self.config.url.replace("::USERNAME::", &username);
 
