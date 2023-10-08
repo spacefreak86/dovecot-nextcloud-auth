@@ -192,8 +192,8 @@ pub trait CredentialsVerifyCache: CredentialsVerify {
     fn allow_expired_on_error(&self) -> bool;
     // Save the cache (e.g. to disk)
     fn save(&self) -> AuthResult<()>;
-    // Default implementation of a cached credentials verify procedure, should be sufficient for almost all cases
-    fn cached_credentials_verify(&mut self, user: &DovecotUser, password: &str) -> AuthResult<()> {
+    // Default implementation of a cached credentials verify procedure, should be sufficient in almost any case
+    fn cached_verify(&mut self, user: &DovecotUser, password: &str) -> AuthResult<()> {
         debug!("verify credentials (cached)");
         self.cleanup().unwrap_or_else(|err| {
             warn!("unable to cleanup cache: {err}");
@@ -259,7 +259,7 @@ pub trait CredentialsVerifyCache: CredentialsVerify {
 
 impl<T: CredentialsVerifyCache> CredentialsVerify for T {
     fn verify(&mut self, user: &DovecotUser, password: &str) -> AuthResult<()> {
-        self.cached_credentials_verify(user, password)
+        self.cached_verify(user, password)
     }
 }
 
