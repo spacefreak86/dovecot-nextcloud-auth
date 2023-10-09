@@ -27,6 +27,19 @@ pub mod hashlib;
 #[cfg(feature = "http")]
 pub mod http;
 
+#[allow(unused_imports)]
+pub mod prelude {
+    pub use crate::{Authenticator, AuthError, AuthResult, ReplyBin};
+    pub use crate::{InternalVerifyModule, LookupModule, PostLookupModule, VerifyCacheModule, VerifyModule};
+    pub use crate::{DOVECOT_PERMFAIL, DOVECOT_NOUSER, DOVECOT_TEMPFAIL};
+    #[cfg(feature = "db")]
+    pub use crate::db::*;
+    #[cfg(feature = "serde")]
+    pub use crate::file::*;
+    #[cfg(feature = "http")]
+    pub use crate::http::*;
+}
+
 use hashlib::*;
 use log::{debug, info, warn};
 use nix::unistd::execvp;

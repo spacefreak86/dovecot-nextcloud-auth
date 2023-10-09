@@ -11,18 +11,7 @@
 // You should have received a copy of the GNU General Public License
 // along with dovecot-auth.  If not, see <http://www.gnu.org/licenses/>.
 
-#[cfg(feature = "db")]
-use dovecot_auth::db::*;
-
-use dovecot_auth::file::{BinaryCacheFile, FileCacheVerifyModule};
-
-#[cfg(feature = "http")]
-use dovecot_auth::http::*;
-
-use dovecot_auth::{AuthError, AuthResult, Authenticator, ReplyBin, DOVECOT_TEMPFAIL};
-use dovecot_auth::{
-    InternalVerifyModule, LookupModule, PostLookupModule, VerifyCacheModule, VerifyModule,
-};
+use dovecot_auth::prelude::*;
 
 use clap::Parser;
 use clap_verbosity_flag::{Verbosity, WarnLevel};
@@ -167,7 +156,7 @@ where
 #[command(author, version, about, long_about = None)]
 /// CheckPassword binary for Dovecot
 ///
-/// https://doc.dovecot.org/configuration_manual/authentication/checkpassword/
+/// <https://doc.dovecot.org/configuration_manual/authentication/checkpassword/>
 struct Args {
     #[arg(
         short,
