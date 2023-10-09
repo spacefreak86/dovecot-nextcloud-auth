@@ -19,10 +19,9 @@ use dovecot_auth::file::{BinaryCacheFile, FileCacheVerifyModule};
 #[cfg(feature = "http")]
 use dovecot_auth::http::*;
 
-use dovecot_auth::{authenticate, AuthError, AuthResult, ReplyBin, DOVECOT_TEMPFAIL};
+use dovecot_auth::{AuthError, AuthResult, Authenticator, ReplyBin, DOVECOT_TEMPFAIL};
 use dovecot_auth::{
-    CredentialsLookup, CredentialsVerify, InternalVerifyModule, LookupModule, PostLookup,
-    PostLookupModule, VerifyCacheModule, VerifyModule,
+    InternalVerifyModule, LookupModule, PostLookupModule, VerifyCacheModule, VerifyModule,
 };
 
 use clap::Parser;
@@ -111,10 +110,6 @@ fn parse_and_cache_config(config_file: File, cache_file: File) -> AuthResult<Con
 fn get_modified(file: &File) -> AuthResult<SystemTime> {
     Ok(file.metadata()?.modified()?)
 }
-
-
-
-
 
 fn read_config_file<P, C>(config_path: P, cache_path: Option<C>) -> AuthResult<Config>
 where
@@ -207,7 +202,7 @@ fn main() {
     if args.print_example_config {
         match toml::to_string_pretty(&Config::default()) {
             Ok(toml) => println!("{toml}"),
-            Err(err) => eprintln!("unable to serialize default config: {err}")
+            Err(err) => eprintln!("unable to serialize default config: {err}"),
         };
         std::process::exit(0);
     }
@@ -246,14 +241,16 @@ fn main() {
         })
     });
 
-    let mut lookup_module: Option<Box<dyn CredentialsLookup>> = None;
+    let mut authenticator = Authenticator::new(reply_bin, fd, config.allow_internal_verify_hosts);
+
     if let Some(module) = config.lookup_module {
         match module {
             #[cfg(feature = "db")]
             LookupModule::DB(config) => {
                 match conn_pool.as_ref().cloned() {
                     Some(pool) => {
-                        lookup_module = Some(Box::new(DBLookupModule::new(config, pool)));
+                        authenticator
+                            .with_lookup_module(Box::new(DBLookupModule::new(config, pool)));
                     }
                     None => {
                         error!("config option db_url not set (needed by lookup_module)");
@@ -264,14 +261,14 @@ fn main() {
         };
     };
 
-    let mut post_lookup_module: Option<Box<dyn PostLookup>> = None;
     if let Some(module) = config.post_lookup_module {
         match module {
             #[cfg(feature = "db")]
             PostLookupModule::DBUpdateCredentials(config) => match conn_pool.as_ref().cloned() {
-                Some(pool) => {
-                    post_lookup_module =
-                        Some(Box::new(DBUpdateCredentialsModule::new(config, pool)));
+                Some(conn_pool) => {
+                    authenticator.with_post_lookup_module(Box::new(
+                        DBUpdateCredentialsModule::new(config, conn_pool),
+                    ));
                 }
                 None => {
                     error!("config option db_url not set (needed by update_credentials_module)");
@@ -281,27 +278,27 @@ fn main() {
         };
     };
 
-    let mut verify_module: Option<Box<dyn CredentialsVerify>> = None;
     if let Some(module) = config.verify_module {
         match module {
             #[cfg(feature = "http")]
             VerifyModule::Http(config) => {
-                verify_module = Some(Box::new(HttpVerifyModule::new(config)));
+                authenticator.with_verify_module(Box::new(HttpVerifyModule::new(config)));
             }
             VerifyModule::Internal => {
-                verify_module = Some(Box::new(InternalVerifyModule::new()));
+                authenticator.with_verify_module(Box::new(InternalVerifyModule::new()));
             }
         };
     };
 
     if let Some(module) = config.verify_cache_module {
-        if let Some(vrfy_mod) = verify_module {
+        if let Some(vrfy_mod) = authenticator.verify_module.take() {
             match module {
                 #[cfg(feature = "db")]
                 VerifyCacheModule::DB(config) => match conn_pool.as_ref().cloned() {
-                    Some(pool) => {
-                        verify_module =
-                            Some(Box::new(DBCacheVerifyModule::new(config, pool, vrfy_mod)));
+                    Some(conn_pool) => {
+                        authenticator.with_verify_module(Box::new(DBCacheVerifyModule::new(
+                            config, conn_pool, vrfy_mod,
+                        )));
                     }
                     None => {
                         error!("config option db_url not set (needed by verify_cache_module)");
@@ -309,20 +306,17 @@ fn main() {
                     }
                 },
                 VerifyCacheModule::File(config) => {
-                    verify_module = Some(Box::new(FileCacheVerifyModule::new(config, vrfy_mod)));
+                    authenticator
+                        .with_verify_module(Box::new(FileCacheVerifyModule::new(config, vrfy_mod)));
                 }
             };
+        } else {
+            error!("no credentials verify module configured (needed by verify cache module)");
+            std::process::exit(DOVECOT_TEMPFAIL);
         }
     };
 
-    let rc = match authenticate(
-        lookup_module,
-        post_lookup_module,
-        verify_module,
-        config.allow_internal_verify_hosts,
-        reply_bin,
-        fd,
-    ) {
+    let rc = match authenticator.authenticate() {
         Ok(_) => 0,
         Err(err) => {
             match &err {

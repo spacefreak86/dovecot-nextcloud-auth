@@ -331,6 +331,7 @@ pub enum VerifyCacheModule {
 }
 
 /// Represents the path to a reply binary and arguments to call it with
+#[derive(Debug, Clone)]
 pub struct ReplyBin {
     pub reply_bin: CString,
     pub args: Vec<CString>,
@@ -385,7 +386,7 @@ pub fn read_credentials_from_fd(fd: Option<i32>) -> AuthResult<(String, String)>
     }
 }
 
-pub fn credentials_lookup(
+fn credentials_lookup(
     user: &mut DovecotUser,
     mut module: Box<dyn CredentialsLookup>,
 ) -> AuthResult<()> {
@@ -426,17 +427,15 @@ fn credentials_verify(
     user: &mut DovecotUser,
     password: String,
     mut verify_module: Box<dyn CredentialsVerify>,
-    allow_internal_verify_hosts: Option<Vec<String>>,
+    allow_internal_verify_hosts: Vec<String>,
 ) -> AuthResult<()> {
     debug!("verify credentials of user {}", user.username);
 
-    let verified = match allow_internal_verify_hosts {
-        Some(hosts) => {
-            debug!("allowed for internal verification: {:?}", hosts);
-            verify_internal_if_allowed(user, &password, &hosts)
-        }
-        None => false,
-    };
+    let mut verified = false;
+    if !allow_internal_verify_hosts.is_empty() {
+        debug!("allowed for internal verification: {:?}", allow_internal_verify_hosts);
+        verified = verify_internal_if_allowed(user, &password, &allow_internal_verify_hosts);
+    }
 
     if !verified {
         verify_module.verify(user, &password)?;
@@ -445,57 +444,109 @@ fn credentials_verify(
     Ok(())
 }
 
-pub fn authenticate(
-    lookup_module: Option<Box<dyn CredentialsLookup>>,
-    post_lookup_module: Option<Box<dyn PostLookup>>,
-    verify_module: Option<Box<dyn CredentialsVerify>>,
-    allow_internal_verify_hosts: Option<Vec<String>>,
-    reply_bin: ReplyBin,
-    fd: Option<i32>,
-) -> AuthResult<Infallible> {
-    let (username, password) = read_credentials_from_fd(fd)?;
-    let mut user = DovecotUser::new(username);
+/// The Authenticator holds opional modules and drives the authentication process
+pub struct Authenticator {
+    pub lookup_module: Option<Box<dyn CredentialsLookup>>,
+    pub post_lookup_module: Option<Box<dyn PostLookup>>,
+    pub verify_module: Option<Box<dyn CredentialsVerify>>,
+    pub allow_internal_verify_hosts: Vec<String>,
+    pub reply_bin: ReplyBin,
+    pub fd: Option<i32>,
+}
 
-    let lookup_res = lookup_module.map(|module| credentials_lookup(&mut user, module));
-    if lookup_res.is_some() {
-        if let Some(mut module) = post_lookup_module {
-            module.post_lookup(&mut user, &password).unwrap_or_else(|err| {
-                warn!("error in post lookup module: {err}");
-            });
+impl Authenticator {
+    /// Returns an Authenticator instance
+    /// 
+    /// # Arguments
+    ///
+    /// * `reply_bin` - A ReplyBin to call if authentication succeeds
+    /// * `fd` - An optional file descriptor to read credentials from
+    /// * `allow_internal_verify_hosts` - An optional list of strings containing IP addresses for which internal password verification is allowed
+    pub fn new(
+        reply_bin: ReplyBin,
+        fd: Option<i32>,
+        allow_internal_verify_hosts: Option<Vec<String>>,
+    ) -> Self {
+        Self {
+            lookup_module: None,
+            post_lookup_module: None,
+            verify_module: None,
+            allow_internal_verify_hosts: allow_internal_verify_hosts.unwrap_or_default(),
+            reply_bin,
+            fd,
         }
     }
 
-    match env::var("CREDENTIALS_LOOKUP").unwrap_or_default().as_str() {
-        "1" => match lookup_res {
-            Some(res) => res,
-            None => Err(AuthError::TempFail(
-                "unable to lookup credentials without a lookup module".to_string(),
-            )),
-        },
-        _ => {
-            if let Some(res) = lookup_res {
-                match res {
-                    Ok(()) => (),
-                    Err(AuthError::NoUser) => debug!("no user data found"),
-                    Err(err) => warn!("error during credentials_lookup: {err}"),
-                };
-            }
+    /// Adds a lookup module to the authenticator
+    pub fn with_lookup_module(&mut self, module: Box<dyn CredentialsLookup>) -> &mut Self {
+        self.lookup_module = Some(module);
+        self
+    }
 
-            match verify_module {
-                Some(verify_module) => credentials_verify(
-                    &mut user,
-                    password,
-                    verify_module,
-                    allow_internal_verify_hosts,
-                ),
-                None => Err(AuthError::TempFail(
-                    "unable to verify credentials without a very module".to_string(),
-                )),
+    /// Adds a post lookup module to the authenticator
+    pub fn with_post_lookup_module(&mut self, module: Box<dyn PostLookup>) -> &mut Self {
+        self.post_lookup_module = Some(module);
+        self
+    }
+
+    /// Adds a verify module to the authenticator
+    pub fn with_verify_module(&mut self, module: Box<dyn CredentialsVerify>) -> &mut Self {
+        self.verify_module = Some(module);
+        self
+    }
+
+    /// Drives the authentication process
+    /// 
+    /// If authentication succeeds, the reply binary is called. The current process image will be replaced
+    /// by the new one, which means that this program actually ends with the call of this function.
+    /// AuthError is returned otherwise.
+    pub fn authenticate(self) -> AuthResult<Infallible> {
+        let (username, password) = read_credentials_from_fd(self.fd)?;
+        let mut user = DovecotUser::new(username);
+    
+        let lookup_res = self.lookup_module.map(|module| credentials_lookup(&mut user, module));
+        if lookup_res.is_some() {
+            if let Some(mut module) = self.post_lookup_module {
+                module
+                    .post_lookup(&mut user, &password)
+                    .unwrap_or_else(|err| {
+                        warn!("error in post lookup module: {err}");
+                    });
             }
         }
-    }?;
-
-    reply_bin
-        .call(user)
-        .map_err(|err| AuthError::TempFail(format!("unable to call reply_bin: {err}")))
+    
+        match env::var("CREDENTIALS_LOOKUP").unwrap_or_default().as_str() {
+            "1" => match lookup_res {
+                Some(res) => res,
+                None => Err(AuthError::TempFail(
+                    "unable to lookup credentials without a lookup module".to_string(),
+                )),
+            },
+            _ => {
+                if let Some(res) = lookup_res {
+                    match res {
+                        Ok(()) => (),
+                        Err(AuthError::NoUser) => debug!("no user data found"),
+                        Err(err) => warn!("error during credentials_lookup: {err}"),
+                    };
+                }
+    
+                match self.verify_module {
+                    Some(verify_module) => credentials_verify(
+                        &mut user,
+                        password,
+                        verify_module,
+                        self.allow_internal_verify_hosts,
+                    ),
+                    None => Err(AuthError::TempFail(
+                        "unable to verify credentials without a very module".to_string(),
+                    )),
+                }
+            }
+        }?;
+    
+        self.reply_bin
+            .call(user)
+            .map_err(|err| AuthError::TempFail(format!("unable to call reply_bin: {err}")))
+    }
 }
