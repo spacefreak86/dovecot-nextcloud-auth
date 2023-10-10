@@ -17,7 +17,7 @@ use base64::{engine::general_purpose, Engine as _};
 use log::warn;
 use rand::distributions::Alphanumeric;
 use rand::Rng;
-use sha2::{Digest, Sha512};
+use sha2::{Digest, Sha512, Sha256};
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 
@@ -28,24 +28,30 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum Scheme {
+    SHA256,
+    SSHA256,
     SHA512,
     SSHA512,
 }
 
 impl Scheme {
-    /// Returns the has prefix, e.g. "{SSHA512}"
-    pub fn hash_prefix(&self) -> &'static str {
-        match self {
-            Self::SHA512 => "{SHA512}",
-            Self::SSHA512 => "{SSHA512}",
-        }
-    }
-
     /// Returns the scheme name, e.g. "SSHA512"
     pub fn as_str(&self) -> &'static str {
         match self {
+            Self::SHA256 => "SHA256",
+            Self::SSHA256 => "SSHA256",
             Self::SHA512 => "SHA512",
             Self::SSHA512 => "SSHA512",
+        }
+    }
+
+    /// Returns the has prefix, e.g. "{SSHA512}"
+    pub fn hash_prefix(&self) -> &'static str {
+        match self {
+            Self::SHA256 => "{SHA256}",
+            Self::SSHA256 => "{SSHA256}",
+            Self::SHA512 => "{SHA512}",
+            Self::SSHA512 => "{SSHA512}",
         }
     }
 }
@@ -84,6 +90,79 @@ pub struct Hash {
     pub hash: String,
 }
 
+/// Returns the SHA256 hash of the value given
+///
+/// # Arguments
+///
+/// * `value` - A byte slice that holds the data to hash
+///
+pub fn sha256(value: &[u8]) -> Hash {
+    let mut hasher = Sha256::new();
+    hasher.update(value);
+    let hash = general_purpose::STANDARD.encode(hasher.finalize());
+    Hash {
+        scheme: Scheme::SHA256,
+        hash,
+    }
+}
+
+/// Returns the SSHA256 hash of the value and salt given
+///
+/// # Arguments
+///
+/// * `value` - A byte slice that holds the data to hash
+/// * `salt` - A byte slice that holds the salt for the hash
+///
+pub fn ssha256(value: &[u8], salt: &[u8]) -> Hash {
+    let mut hasher = Sha256::new();
+    hasher.update(value);
+    hasher.update(salt);
+    let hash_bytes = hasher.finalize();
+    let salted_hash = [&hash_bytes, salt].concat();
+    let hash = general_purpose::STANDARD.encode(salted_hash);
+    Hash {
+        scheme: Scheme::SSHA256,
+        hash,
+    }
+}
+
+/// Returns the SHA512 hash of the value given
+///
+/// # Arguments
+///
+/// * `value` - A byte slice that holds the data to hash
+///
+pub fn sha512(value: &[u8]) -> Hash {
+    let mut hasher = Sha512::new();
+    hasher.update(value);
+    let hash_bytes = hasher.finalize();
+    let hash = general_purpose::STANDARD.encode(hash_bytes);
+    Hash {
+        scheme: Scheme::SHA512,
+        hash,
+    }
+}
+
+/// Returns the SSHA512 hash of the value and salt given
+///
+/// # Arguments
+///
+/// * `value` - A byte slice that holds the data to hash
+/// * `salt` - A byte slice that holds the salt for the hash
+///
+pub fn ssha512(value: &[u8], salt: &[u8]) -> Hash {
+    let mut hasher = Sha512::new();
+    hasher.update(value);
+    hasher.update(salt);
+    let hash_bytes = hasher.finalize();
+    let salted_hash = [&hash_bytes, salt].concat();
+    let hash = general_purpose::STANDARD.encode(salted_hash);
+    Hash {
+        scheme: Scheme::SSHA512,
+        hash,
+    }
+}
+
 impl Hash {
     /// Returns a hash of the value and scheme given
     ///
@@ -95,6 +174,15 @@ impl Hash {
     pub fn new<T: AsRef<str>>(value: T, scheme: &Scheme) -> Self {
         let value = value.as_ref().as_bytes();
         match scheme {
+            Scheme::SHA256 => sha256(value),
+            Scheme::SSHA256 => {
+                let salt: Vec<u8> = rand::thread_rng()
+                    .sample_iter(&Alphanumeric)
+                    .take(5)
+                    .collect();
+                ssha256(value, &salt)
+            }
+            Scheme::SHA512 => sha512(value),
             Scheme::SSHA512 => {
                 let salt: Vec<u8> = rand::thread_rng()
                     .sample_iter(&Alphanumeric)
@@ -102,7 +190,6 @@ impl Hash {
                     .collect();
                 ssha512(value, &salt)
             }
-            Scheme::SHA512 => sha512(value),
         }
     }
 }
@@ -135,43 +222,6 @@ impl TryFrom<&str> for Hash {
     }
 }
 
-/// Returns the SSHA512 hash of the value and salt given
-///
-/// # Arguments
-///
-/// * `value` - A byte slice that holds the data to hash
-/// * `salt` - A byte slice that holds the salt for the hash
-///
-pub fn ssha512(value: &[u8], salt: &[u8]) -> Hash {
-    let mut hasher = Sha512::new();
-    hasher.update(value);
-    hasher.update(salt);
-    let hash_bytes = hasher.finalize();
-    let salted_hash = [&hash_bytes, salt].concat();
-    let hash = general_purpose::STANDARD.encode(salted_hash);
-    Hash {
-        scheme: Scheme::SSHA512,
-        hash,
-    }
-}
-
-/// Returns the SHA512 hash of the value given
-///
-/// # Arguments
-///
-/// * `value` - A byte slice that holds the data to hash
-///
-pub fn sha512(value: &[u8]) -> Hash {
-    let mut hasher = Sha512::new();
-    hasher.update(value);
-    let hash_bytes = hasher.finalize();
-    let hash = general_purpose::STANDARD.encode(hash_bytes);
-    Hash {
-        scheme: Scheme::SHA512,
-        hash,
-    }
-}
-
 /// Returns true if the given value matches to the given hash
 ///
 /// # Arguments
@@ -186,6 +236,21 @@ pub fn verify_value<T: AsRef<str>>(value: T, hash: &Hash) -> bool {
     }
 
     let hash1 = match hash.scheme {
+        Scheme::SHA256 => sha256(value.as_bytes()),
+        Scheme::SSHA256 => match general_purpose::STANDARD.decode(&hash.hash) {
+            Ok(decoded_hash) => {
+                if decoded_hash.len() < 65 {
+                    return false;
+                }
+                let salt = &decoded_hash[64..];
+                ssha256(value.as_bytes(), salt)
+            }
+            _ => {
+                warn!("base64: unable to decode hash: {hash}");
+                return false;
+            }
+        },
+        Scheme::SHA512 => sha512(value.as_bytes()),
         Scheme::SSHA512 => match general_purpose::STANDARD.decode(&hash.hash) {
             Ok(decoded_hash) => {
                 if decoded_hash.len() < 65 {
@@ -199,7 +264,6 @@ pub fn verify_value<T: AsRef<str>>(value: T, hash: &Hash) -> bool {
                 return false;
             }
         },
-        Scheme::SHA512 => sha512(value.as_bytes()),
     };
 
     hash == &hash1
