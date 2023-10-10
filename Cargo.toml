@@ -20,14 +20,13 @@ fs2 = "*"
 urlencoding = "*"
 ureq = "*"
 base64 = "*"
+hex = "*"
 sha2 = "*"
 rand = "*"
 clap = { version="*", features=["derive", "cargo"] }
 clap-verbosity-flag = "*"
 log = "*"
 env_logger = "*"
-strum = "*"
-strum_macros = "*"
 
 [features]
 serde = []

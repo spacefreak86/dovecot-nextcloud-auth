@@ -126,7 +126,7 @@ impl FileCacheVerifyModule {
 
 impl CredentialsVerifyCache for FileCacheVerifyModule {
     fn hash(&self, password: &str) -> Hash {
-        Hash::new(password, &self.hash_scheme)
+        Hash::new(password, self.hash_scheme.clone())
     }
 
     fn get_hashes(&self, user: &str) -> AuthResult<(Vec<Hash>, Vec<Hash>)> {

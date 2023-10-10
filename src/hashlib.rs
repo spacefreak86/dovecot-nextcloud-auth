@@ -11,21 +11,86 @@
 // You should have received a copy of the GNU General Public License
 // along with dovecot-auth.  If not, see <http://www.gnu.org/licenses/>.
 
+//! The hashlib implements hash functions compatible to Dovecot.
+
 use std::fmt::Display;
 
 use base64::{engine::general_purpose, Engine as _};
-use log::warn;
+use hex;
 use rand::distributions::Alphanumeric;
 use rand::Rng;
-use sha2::{Digest, Sha512, Sha256};
-use strum::IntoEnumIterator;
-use strum_macros::EnumIter;
+use sha2::{Digest, Sha256, Sha512};
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
-/// An implemented hash scheme
-#[derive(Debug, Clone, PartialEq, Eq, EnumIter)]
+const SSHA256_SALT_LEN: usize = 4;
+const SSHA512_SALT_LEN: usize = 4;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+/// Represents a hash encoding
+pub enum Encoding {
+    Base64,
+    B64,
+    Hex,
+}
+
+impl Default for Encoding {
+    fn default() -> Self {
+        Self::Base64
+    }
+}
+
+impl Display for Encoding {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Base64 => write!(f, "base64"),
+            Self::B64 => write!(f, "b64"),
+            Self::Hex => write!(f, "hex"),
+        }
+    }
+}
+
+impl TryFrom<&str> for Encoding {
+    type Error = String;
+
+    /// Returns an encoding if the value equals to "base64" or "hex".
+    ///
+    /// # Arguments
+    ///
+    /// * `value` - A string slice that holds the name of the encoding
+    ///
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value.to_lowercase().as_str() {
+            "base64" => Ok(Self::Base64),
+            "b64" => Ok(Self::B64),
+            "hex" => Ok(Self::Hex),
+            _ => Err(format!("unknown encoding: {value}")),
+        }
+    }
+}
+
+impl Encoding {
+    pub fn encode(&self, data: &[u8]) -> String {
+        match self {
+            Self::Base64 | Self::B64 => general_purpose::STANDARD.encode(data),
+            Self::Hex => hex::encode(data),
+        }
+    }
+
+    pub fn decode<T: AsRef<[u8]>>(&self, data: T) -> Result<Vec<u8>, String> {
+        match self {
+            Self::Base64 | Self::B64 => general_purpose::STANDARD
+                .decode(data)
+                .map_err(|err| err.to_string()),
+            Self::Hex => hex::decode(data).map_err(|err| err.to_string()),
+        }
+    }
+}
+
+/// Represents a hash scheme
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum Scheme {
     SHA256,
@@ -34,49 +99,34 @@ pub enum Scheme {
     SSHA512,
 }
 
-impl Scheme {
-    /// Returns the scheme name, e.g. "SSHA512"
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::SHA256 => "SHA256",
-            Self::SSHA256 => "SSHA256",
-            Self::SHA512 => "SHA512",
-            Self::SSHA512 => "SSHA512",
-        }
-    }
-
-    /// Returns the has prefix, e.g. "{SSHA512}"
-    pub fn hash_prefix(&self) -> &'static str {
-        match self {
-            Self::SHA256 => "{SHA256}",
-            Self::SSHA256 => "{SSHA256}",
-            Self::SHA512 => "{SHA512}",
-            Self::SSHA512 => "{SSHA512}",
-        }
-    }
-}
-
 impl Display for Scheme {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let value = self.as_str();
-        write!(f, "{value}")
+        match self {
+            Self::SHA256 => write!(f, "SHA256"),
+            Self::SSHA256 => write!(f, "SSHA256"),
+            Self::SHA512 => write!(f, "SHA512"),
+            Self::SSHA512 => write!(f, "SSHA512"),
+        }
     }
 }
 
 impl TryFrom<&str> for Scheme {
-    type Error = &'static str;
+    type Error = String;
 
-    /// Returns a scheme if the value is equal to a known scheme or starts with a known hash prefix
+    /// Returns a scheme if the value equals a known hash scheme.
     ///
     /// # Arguments
     ///
-    /// * `value` - A string slice that holds a prefixed hash or scheme name
+    /// * `value` - A string slice that holds the name of the hash scheme
     ///
     fn try_from(value: &str) -> Result<Self, Self::Error> {
-        let value = value.to_uppercase();
-        Self::iter()
-            .find(|scheme| value.eq(scheme.as_str()) || value.starts_with(scheme.hash_prefix()))
-            .ok_or("unknown hash scheme")
+        match value.to_uppercase().as_str() {
+            "SHA256" => Ok(Self::SHA256),
+            "SSHA256" => Ok(Self::SSHA256),
+            "SHA512" => Ok(Self::SHA512),
+            "SSHA512" => Ok(Self::SSHA512),
+            _ => Err(format!("unknown scheme: {value}")),
+        }
     }
 }
 
@@ -84,82 +134,67 @@ impl TryFrom<&str> for Scheme {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Hash {
-    /// A hash must have a known scheme
+    pub encoding: Option<Encoding>,
     pub scheme: Scheme,
-    /// The hash itself
-    pub hash: String,
+    hash: Vec<u8>,
 }
 
-/// Returns the SHA256 hash of the value given
-///
-/// # Arguments
-///
-/// * `value` - A byte slice that holds the data to hash
-///
-pub fn sha256(value: &[u8]) -> Hash {
-    let mut hasher = Sha256::new();
-    hasher.update(value);
-    let hash = general_purpose::STANDARD.encode(hasher.finalize());
-    Hash {
-        scheme: Scheme::SHA256,
-        hash,
+impl Display for Hash {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let prefix = match self.encoding.as_ref() {
+            Some(encoding) => format!("{{{}.{encoding}}}", self.scheme),
+            None => format!("{{{}}}", self.scheme),
+        };
+        let hash = self
+            .encoding
+            .as_ref()
+            .unwrap_or(&Encoding::default())
+            .encode(&self.hash);
+        write!(f, "{prefix}{hash}")
     }
 }
 
-/// Returns the SSHA256 hash of the value and salt given
-///
-/// # Arguments
-///
-/// * `value` - A byte slice that holds the data to hash
-/// * `salt` - A byte slice that holds the salt for the hash
-///
-pub fn ssha256(value: &[u8], salt: &[u8]) -> Hash {
-    let mut hasher = Sha256::new();
-    hasher.update(value);
-    hasher.update(salt);
-    let hash_bytes = hasher.finalize();
-    let salted_hash = [&hash_bytes, salt].concat();
-    let hash = general_purpose::STANDARD.encode(salted_hash);
-    Hash {
-        scheme: Scheme::SSHA256,
-        hash,
-    }
-}
+impl TryFrom<&str> for Hash {
+    type Error = String;
 
-/// Returns the SHA512 hash of the value given
-///
-/// # Arguments
-///
-/// * `value` - A byte slice that holds the data to hash
-///
-pub fn sha512(value: &[u8]) -> Hash {
-    let mut hasher = Sha512::new();
-    hasher.update(value);
-    let hash_bytes = hasher.finalize();
-    let hash = general_purpose::STANDARD.encode(hash_bytes);
-    Hash {
-        scheme: Scheme::SHA512,
-        hash,
-    }
-}
+    /// Returns a hash if the value is equal to a known scheme or starts with a known hash prefix
+    ///
+    /// # Arguments
+    ///
+    /// * `value` - A string slice that holds a prefixed hash
+    ///
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        if !value.starts_with('{') {
+            return Err("hash is not prefixed".to_string());
+        }
 
-/// Returns the SSHA512 hash of the value and salt given
-///
-/// # Arguments
-///
-/// * `value` - A byte slice that holds the data to hash
-/// * `salt` - A byte slice that holds the salt for the hash
-///
-pub fn ssha512(value: &[u8], salt: &[u8]) -> Hash {
-    let mut hasher = Sha512::new();
-    hasher.update(value);
-    hasher.update(salt);
-    let hash_bytes = hasher.finalize();
-    let salted_hash = [&hash_bytes, salt].concat();
-    let hash = general_purpose::STANDARD.encode(salted_hash);
-    Hash {
-        scheme: Scheme::SSHA512,
-        hash,
+        let prefix_end = value.find('}').ok_or("invalid hash prefix")?;
+        let prefix = &value[1..prefix_end];
+
+        let (scheme, encoding) = match prefix.find('.') {
+            Some(p) => {
+                let scheme = Scheme::try_from(&prefix[0..p])?;
+                let encoding = Encoding::try_from(&prefix[p + 1..])?;
+                (scheme, Some(encoding))
+            }
+            None => (Scheme::try_from(prefix)?, None),
+        };
+
+        let hash = encoding
+            .as_ref()
+            .unwrap_or(&Encoding::default())
+            .decode(&value[prefix_end + 1..])
+            .map_err(|err| format!("unable to decode hash: {err}"))?;
+
+        if hash.is_empty() {
+            return Err("empty hash".to_string());
+        }
+
+        Ok(Self {
+            encoding,
+            scheme,
+            hash,
+        })
     }
 }
 
@@ -170,103 +205,135 @@ impl Hash {
     ///
     /// * `value` - A string slice that holds the data to hash
     /// * `scheme` - The hash scheme to use
+    /// * `encoding` - Optional encoding to use, defaults to base64
     ///
-    pub fn new<T: AsRef<str>>(value: T, scheme: &Scheme) -> Self {
+    pub fn new<T: AsRef<str>>(value: T, scheme: Scheme) -> Self {
         let value = value.as_ref().as_bytes();
         match scheme {
-            Scheme::SHA256 => sha256(value),
-            Scheme::SSHA256 => {
-                let salt: Vec<u8> = rand::thread_rng()
-                    .sample_iter(&Alphanumeric)
-                    .take(5)
-                    .collect();
-                ssha256(value, &salt)
-            }
-            Scheme::SHA512 => sha512(value),
-            Scheme::SSHA512 => {
-                let salt: Vec<u8> = rand::thread_rng()
-                    .sample_iter(&Alphanumeric)
-                    .take(5)
-                    .collect();
-                ssha512(value, &salt)
-            }
+            Scheme::SHA256 => Self::sha256(value, None),
+            Scheme::SSHA256 => Self::ssha256(value, None, None),
+            Scheme::SHA512 => Self::sha512(value, None),
+            Scheme::SSHA512 => Self::ssha512(value, None, None),
         }
     }
-}
 
-impl Display for Hash {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let scheme = self.scheme.hash_prefix();
-        let hash = &self.hash;
-        write!(f, "{scheme}{hash}")
+    /// Returns a randomly generated salt with the size given
+    pub fn generate_salt(size: usize) -> Vec<u8> {
+        rand::thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(size)
+            .collect()
     }
-}
 
-impl TryFrom<&str> for Hash {
-    type Error = &'static str;
-
-    /// Returns a hash if the value is equal to a known scheme or starts with a known hash prefix
+    /// Returns the SHA256 hash of the value given
     ///
     /// # Arguments
     ///
-    /// * `value` - A string slice that holds a prefixed hash
+    /// * `value` - A byte slice that holds the data to hash
     ///
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        let scheme = Scheme::try_from(value)?;
-        let start_pos = scheme.hash_prefix().len();
-        let hash = value[start_pos..].to_string();
-        if hash.is_empty() {
-            return Err("empty hash");
+    pub fn sha256(value: &[u8], encoding: Option<Encoding>) -> Self {
+        let mut hasher = Sha256::new();
+        hasher.update(value);
+        Hash {
+            encoding,
+            scheme: Scheme::SHA256,
+            hash: hasher.finalize().to_vec(),
         }
-        Ok(Self { scheme, hash })
-    }
-}
-
-/// Returns true if the given value matches to the given hash
-///
-/// # Arguments
-///
-/// * `value` - A string slice that holds the value to verify
-/// * `hash` - A hash by which the value is verified
-///
-pub fn verify_value<T: AsRef<str>>(value: T, hash: &Hash) -> bool {
-    let value = value.as_ref();
-    if value.is_empty() {
-        return false;
     }
 
-    let hash1 = match hash.scheme {
-        Scheme::SHA256 => sha256(value.as_bytes()),
-        Scheme::SSHA256 => match general_purpose::STANDARD.decode(&hash.hash) {
-            Ok(decoded_hash) => {
-                if decoded_hash.len() < 65 {
-                    return false;
-                }
-                let salt = &decoded_hash[64..];
-                ssha256(value.as_bytes(), salt)
-            }
-            _ => {
-                warn!("base64: unable to decode hash: {hash}");
-                return false;
-            }
-        },
-        Scheme::SHA512 => sha512(value.as_bytes()),
-        Scheme::SSHA512 => match general_purpose::STANDARD.decode(&hash.hash) {
-            Ok(decoded_hash) => {
-                if decoded_hash.len() < 65 {
-                    return false;
-                }
-                let salt = &decoded_hash[64..];
-                ssha512(value.as_bytes(), salt)
-            }
-            _ => {
-                warn!("base64: unable to decode hash: {hash}");
-                return false;
-            }
-        },
-    };
+    /// Returns the SSHA256 hash of the value and salt given
+    ///
+    /// # Arguments
+    ///
+    /// * `value` - A byte slice that holds the data to hash
+    /// * `salt` - An optional byte slice that holds the salt for the hash
+    ///
+    pub fn ssha256(value: &[u8], salt: Option<&[u8]>, encoding: Option<Encoding>) -> Hash {
+        let salt = salt
+            .map(|s| s.to_vec())
+            .unwrap_or(Self::generate_salt(SSHA256_SALT_LEN));
+        let mut hasher = Sha256::new();
+        hasher.update(value);
+        hasher.update(&salt);
+        let hash = hasher.finalize().to_vec();
+        Hash {
+            encoding,
+            scheme: Scheme::SSHA256,
+            hash: [hash, salt].concat(),
+        }
+    }
 
-    hash == &hash1
+    /// Returns the SHA512 hash of the value given
+    ///
+    /// # Arguments
+    ///
+    /// * `value` - A byte slice that holds the data to hash
+    ///
+    pub fn sha512(value: &[u8], encoding: Option<Encoding>) -> Hash {
+        let mut hasher = Sha512::new();
+        hasher.update(value);
+        Hash {
+            encoding,
+            scheme: Scheme::SHA512,
+            hash: hasher.finalize().to_vec(),
+        }
+    }
+
+    /// Returns the SSHA512 hash of the value and salt given
+    ///
+    /// # Arguments
+    ///
+    /// * `value` - A byte slice that holds the data to hash
+    /// * `salt` - An optional byte slice that holds the salt for the hash
+    ///
+    pub fn ssha512(value: &[u8], salt: Option<&[u8]>, encoding: Option<Encoding>) -> Hash {
+        let salt = salt
+            .map(|s| s.to_vec())
+            .unwrap_or(Self::generate_salt(SSHA512_SALT_LEN));
+        let mut hasher = Sha512::new();
+        hasher.update(value);
+        hasher.update(&salt);
+        let hash = hasher.finalize().to_vec();
+        Hash {
+            encoding,
+            scheme: Scheme::SSHA512,
+            hash: [hash, salt].concat(),
+        }
+    }
+
+    /// Returns true if the given value matches to the given hash
+    ///
+    /// # Arguments
+    ///
+    /// * `value` - A string slice that holds the value to verify
+    ///
+    pub fn verify<T: AsRef<str>>(&self, value: T) -> bool {
+        let value = value.as_ref().as_bytes();
+        if value.is_empty() {
+            return false;
+        }
+
+        let hash = match self.scheme {
+            Scheme::SHA256 => Self::sha256(value, None),
+            Scheme::SSHA256 => {
+                if self.hash.len() < 33 {
+                    return false;
+                }
+                let salt = Some(&self.hash[32..]);
+                Self::ssha256(value, salt, None)
+            }
+            Scheme::SHA512 => Self::sha512(value, None),
+            Scheme::SSHA512 => {
+                if self.hash.len() < 65 {
+                    return false;
+                }
+                let salt = Some(&self.hash[64..]);
+                Self::ssha512(value, salt, None)
+            }
+        };
+
+        self.hash == hash.hash
+    }
 }
 
 /// Verifies the value to every hash in the list and returns an optional reference to the first matching hash
@@ -282,7 +349,7 @@ pub fn find_hash<T: AsRef<str>>(value: T, hash_list: &[Hash]) -> Option<&Hash> {
         return None;
     }
 
-    if let Some(index) = hash_list.iter().position(|hash| verify_value(value, hash)) {
+    if let Some(index) = hash_list.iter().position(|hash| hash.verify(value)) {
         return Some(&hash_list[index]);
     }
     None
@@ -290,7 +357,7 @@ pub fn find_hash<T: AsRef<str>>(value: T, hash_list: &[Hash]) -> Option<&Hash> {
 
 #[cfg(test)]
 mod tests {
-    use crate::hashlib::{find_hash, verify_value, Hash, Scheme};
+    use crate::hashlib::{find_hash, Hash, Scheme};
 
     const TEST_PASSWORD: &'static str = "TestPass ä?=%*@+-ç£{}()!#\"'~`";
     const TEST_PASSWORD2: &'static str = "TestPass2 ä?=%*@+-ç£{}()!#\"'~`";
@@ -301,62 +368,74 @@ mod tests {
     const TEST_PASSWORD_SHA512_BAD: &'static str = "{SHA512}ZzYTXW02PU1y/z4tXXBmoXSJihXhpnaTODYof7GpLfjkFycWLBKLdHkP4bRWEkYJsD3HjgTn2drxj8nzgAUckQ==";
 
     #[test]
-    fn test_ssha512_hash_and_verify() {
-        let test_hash = Hash::new(&TEST_PASSWORD, &Scheme::SSHA512);
-        assert_eq!(verify_value(TEST_PASSWORD, &test_hash), true);
+    fn test_sha256_hash_and_verify() {
+        let test_hash = Hash::new(&TEST_PASSWORD, Scheme::SHA256);
+        assert_eq!(test_hash.verify(TEST_PASSWORD), true);
+    }
+
+    #[test]
+    fn test_ssha256_hash_and_verify() {
+        let test_hash = Hash::new(&TEST_PASSWORD, Scheme::SSHA256);
+        assert_eq!(test_hash.verify(TEST_PASSWORD), true);
     }
 
     #[test]
     fn test_sha512_hash_and_verify() {
-        let test_hash = Hash::new(&TEST_PASSWORD, &Scheme::SHA512);
-        assert_eq!(verify_value(TEST_PASSWORD, &test_hash), true);
+        let test_hash = Hash::new(&TEST_PASSWORD, Scheme::SHA512);
+        assert_eq!(test_hash.verify(TEST_PASSWORD), true);
     }
 
     #[test]
-    fn test_get_matching_hash() {
+    fn test_ssha512_hash_and_verify() {
+        let test_hash = Hash::new(&TEST_PASSWORD, Scheme::SSHA512);
+        assert_eq!(test_hash.verify(TEST_PASSWORD), true);
+    }
+
+    #[test]
+    fn test_find_hash() {
         let mut hashes = vec![
-            Hash::new("AnotherTestPassword", &Scheme::SSHA512),
-            Hash::new("AndAnotherTestPassword", &Scheme::SHA512),
+            Hash::new("AnotherTestPassword", Scheme::SSHA512),
+            Hash::new("AndAnotherTestPassword", Scheme::SHA512),
         ];
 
         assert_eq!(find_hash(TEST_PASSWORD, &mut hashes), None);
-        let ssha512_hash = Hash::new(TEST_PASSWORD, &Scheme::SSHA512);
+        let ssha512_hash = Hash::new(TEST_PASSWORD, Scheme::SSHA512);
         hashes.insert(1, ssha512_hash.clone());
         assert_eq!(find_hash(TEST_PASSWORD, &mut hashes), Some(&ssha512_hash));
 
         assert_eq!(find_hash(TEST_PASSWORD2, &mut hashes), None);
-        let sha512_hash = Hash::new(TEST_PASSWORD2, &Scheme::SHA512);
+        let sha512_hash = Hash::new(TEST_PASSWORD2, Scheme::SHA512);
         hashes.push(sha512_hash.clone());
         assert_eq!(find_hash(TEST_PASSWORD2, &mut hashes), Some(&sha512_hash));
     }
 
     #[test]
     fn test_display_and_tryfrom() {
-        let ssha512_hash = Hash::new(TEST_PASSWORD, &Scheme::SSHA512);
+        let ssha512_hash = Hash::new(TEST_PASSWORD, Scheme::SSHA512);
         let hash_string = ssha512_hash.to_string();
         assert_eq!(Hash::try_from(hash_string.as_str()), Ok(ssha512_hash));
 
-        let sha512_hash = Hash::new(TEST_PASSWORD, &Scheme::SHA512);
+        let sha512_hash = Hash::new(TEST_PASSWORD, Scheme::SHA512);
         let hash_string = sha512_hash.to_string();
         assert_eq!(Hash::try_from(hash_string.as_str()), Ok(sha512_hash));
 
         assert_eq!(
             Hash::try_from("{INVALID}HASHDATA"),
-            Err("unknown hash scheme")
+            Err("unknown scheme: INVALID".to_string())
         );
-        assert_eq!(Hash::try_from("{SHA512}"), Err("empty hash"));
+        assert_eq!(Hash::try_from("{SHA512}"), Err("empty hash".to_string()));
     }
 
     #[test]
     fn test_verify_password() {
         let ssha512_hash = Hash::try_from(TEST_PASSWORD_SSHA512).unwrap();
         let ssha512_hash_bad = Hash::try_from(TEST_PASSWORD_SSHA512_BAD).unwrap();
-        assert_eq!(verify_value(TEST_PASSWORD, &ssha512_hash), true);
-        assert_eq!(verify_value(TEST_PASSWORD, &ssha512_hash_bad), false);
+        assert_eq!(ssha512_hash.verify(TEST_PASSWORD), true);
+        assert_eq!(ssha512_hash_bad.verify(TEST_PASSWORD), false);
 
         let sha512_hash = Hash::try_from(TEST_PASSWORD_SHA512).unwrap();
         let sha512_hash_bad = Hash::try_from(TEST_PASSWORD_SHA512_BAD).unwrap();
-        assert_eq!(verify_value(TEST_PASSWORD, &sha512_hash), true);
-        assert_eq!(verify_value(TEST_PASSWORD, &sha512_hash_bad), false);
+        assert_eq!(sha512_hash.verify(TEST_PASSWORD), true);
+        assert_eq!(sha512_hash_bad.verify(TEST_PASSWORD), false);
     }
 }

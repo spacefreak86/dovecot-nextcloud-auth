@@ -293,7 +293,7 @@ impl InternalVerifyModule {
             .as_ref()
             .and_then(|p| Hash::try_from(p.as_str()).ok())
         {
-            Some(hash) => verify_value(password, &hash),
+            Some(hash) => hash.verify(password),
             None => false,
         }
     }

@@ -238,7 +238,7 @@ impl DBCacheVerifyModule {
 
 impl CredentialsVerifyCache for DBCacheVerifyModule {
     fn hash(&self, password: &str) -> Hash {
-        Hash::new(password, &self.hash_scheme)
+        Hash::new(password, self.hash_scheme.clone())
     }
 
     fn get_hashes(&self, user: &str) -> AuthResult<(Vec<Hash>, Vec<Hash>)> {
@@ -342,13 +342,14 @@ impl PostLookup for DBUpdateCredentialsModule {
             return Ok(());
         }
 
-        let hash = user.password.as_ref().ok_or_else(|| {
+        let cur_hash = user.password.as_ref().ok_or_else(|| {
             AuthError::TempFail(
                 "unable to update credentials, lookup did not return password hash".to_string(),
             )
         })?;
 
-        if hash.starts_with(self.config.hash_scheme.hash_prefix()) {
+        let hash = Hash::try_from(cur_hash.as_str()).map_err(|err| AuthError::TempFail(err))?;
+        if hash.scheme == self.config.hash_scheme {
             return Ok(());
         }
 
@@ -356,10 +357,9 @@ impl PostLookup for DBUpdateCredentialsModule {
             return Ok(());
         }
 
-        let hash = Hash::new(password, &self.config.hash_scheme);
         update_password(
             &user.username,
-            &hash.to_string(),
+            &Hash::new(password, self.config.hash_scheme.clone()).to_string(),
             &self.conn_pool,
             &self.config.update_password_query,
         )?;
