@@ -34,12 +34,7 @@ pub enum Encoding {
     Base64,
     B64,
     Hex,
-}
-
-impl Default for Encoding {
-    fn default() -> Self {
-        Self::Base64
-    }
+    None,
 }
 
 impl Display for Encoding {
@@ -48,6 +43,7 @@ impl Display for Encoding {
             Self::Base64 => write!(f, "base64"),
             Self::B64 => write!(f, "b64"),
             Self::Hex => write!(f, "hex"),
+            Self::None => write!(f, ""),
         }
     }
 }
@@ -76,6 +72,7 @@ impl Encoding {
         match self {
             Self::Base64 | Self::B64 => general_purpose::STANDARD.encode(data),
             Self::Hex => hex::encode(data),
+            Self::None => String::from_utf8_lossy(data).to_string(),
         }
     }
 
@@ -85,6 +82,7 @@ impl Encoding {
                 .decode(data)
                 .map_err(|err| err.to_string()),
             Self::Hex => hex::decode(data).map_err(|err| err.to_string()),
+            Self::None => Ok(data.as_ref().to_vec()),
         }
     }
 }
@@ -130,6 +128,18 @@ impl TryFrom<&str> for Scheme {
     }
 }
 
+impl Scheme {
+    /// Returns the default encoding of the scheme
+    pub fn default_encoding(&self) -> Encoding {
+        match self {
+            Self::SHA256 => Encoding::Base64,
+            Self::SSHA256 => Encoding::Base64,
+            Self::SHA512 => Encoding::Base64,
+            Self::SSHA512 => Encoding::Base64,
+        }
+    }
+}
+
 /// A hash with a known scheme
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -148,7 +158,7 @@ impl Display for Hash {
         let hash = self
             .encoding
             .as_ref()
-            .unwrap_or(&Encoding::default())
+            .unwrap_or(&self.scheme.default_encoding())
             .encode(&self.hash);
         write!(f, "{prefix}{hash}")
     }
@@ -167,9 +177,13 @@ impl TryFrom<&str> for Hash {
         if !value.starts_with('{') {
             return Err("hash is not prefixed".to_string());
         }
-
         let prefix_end = value.find('}').ok_or("invalid hash prefix")?;
         let prefix = &value[1..prefix_end];
+
+        let encoded_hash = &value[prefix_end + 1..];
+        if encoded_hash.is_empty() {
+            return Err("empty hash".to_string());
+        }
 
         let (scheme, encoding) = match prefix.find('.') {
             Some(p) => {
@@ -180,15 +194,15 @@ impl TryFrom<&str> for Hash {
             None => (Scheme::try_from(prefix)?, None),
         };
 
-        let hash = encoding
-            .as_ref()
-            .unwrap_or(&Encoding::default())
-            .decode(&value[prefix_end + 1..])
-            .map_err(|err| format!("unable to decode hash: {err}"))?;
-
-        if hash.is_empty() {
-            return Err("empty hash".to_string());
-        }
+        let hash = match &encoding {
+            Some(encoding) => encoding.decode(encoded_hash)?,
+            None => match scheme.default_encoding() {
+                Encoding::Hex => Encoding::Hex
+                    .decode(encoded_hash)
+                    .unwrap_or(Encoding::Base64.decode(encoded_hash)?),
+                _ => Encoding::Base64.decode(encoded_hash)?,
+            },
+        };
 
         Ok(Self {
             encoding,
